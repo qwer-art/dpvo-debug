@@ -9,7 +9,7 @@ from .lietorch import SE3
 from .net import VONet
 from .patchgraph import PatchGraph
 from .utils import *
-
+from .debug_utils import *
 mp.set_start_method('spawn', True)
 
 
@@ -96,7 +96,7 @@ class DPVO:
             for k, v in state_dict.items():
                 if "update.lmbda" not in k:
                     new_state_dict[k.replace('module.', '')] = v
-            
+
             self.network = VONet()
             self.network.load_state_dict(new_state_dict)
 
@@ -268,7 +268,7 @@ class DPVO:
         i = self.n - self.cfg.KEYFRAME_INDEX - 1
         j = self.n - self.cfg.KEYFRAME_INDEX + 1
         m = self.motionmag(i, j) + self.motionmag(j, i)
- 
+
         if m / 2 < self.cfg.KEYFRAME_THRESH:
             k = self.n - self.cfg.KEYFRAME_INDEX
             t0 = self.pg.tstamps_[k-1]
@@ -386,14 +386,22 @@ class DPVO:
         if self.viewer is not None:
             self.viewer.update_image(image.contiguous())
 
+        ## image/intrinsics
+        # save_image(tstamp,image)
+        # save_intrinsics(tstamp,intrinsics)
+
         image = 2 * (image[None,None] / 255.0) - 0.5
-        
+
         with autocast(enabled=self.cfg.MIXED_PRECISION):
             fmap, gmap, imap, patches, _, clr = \
                 self.network.patchify(image,
                     patches_per_image=self.cfg.PATCHES_PER_FRAME, 
                     centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
                     return_color=True)
+
+        # pred_feature = (fmap, gmap, imap, patches, _, clr)
+        # save_features(tstamp,pred_feature)
+        print(f"frame: {tstamp},{image.shape},{intrinsics.shape}")
 
         ### update state attributes ###
         self.tlist.append(tstamp)
