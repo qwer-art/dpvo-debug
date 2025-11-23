@@ -4,7 +4,7 @@ if [[ $1=="debug" ]]; then
     export PYDEBUG=" -m debugpy --wait-for-client --listen localhost:3197 "
     shift
 else
-    export PYDEBUG=""
+    export PYDEBUG=" "
 fi
 
 python_file=/home/jerett/Project/DPVO/demo.py

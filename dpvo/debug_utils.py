@@ -69,3 +69,51 @@ def load_features(frame_time):
     with open(filename,"rb") as file:
         pkl_data = pickle.load(file)
     return pkl_data
+
+def save_poses(frame_time,pg_poses):
+    ## 1.tensor->array
+    poses = pg_poses.detach().cpu().numpy()
+    ## 2.mkdir
+    direct = osp.join(debug_path,"poses")
+    if not osp.exists(direct):
+        os.makedirs(direct,exist_ok=True)
+    ## 3.file_name
+    filename = osp.join(direct,f"{frame_time}.npy")
+    np.save(filename,poses)
+
+def load_poses(frame_time):
+    direct = osp.join(debug_path,"poses")
+    filename = osp.join(direct,f"{frame_time}.npy")
+    return np.load(filename)
+
+def save_points(frame_time,pg_points):
+    ## 1.tensor->array
+    points = pg_points.detach().cpu().numpy()
+    ## 2.mkdir
+    direct = osp.join(debug_path,"points")
+    if not osp.exists(direct):
+        os.makedirs(direct,exist_ok=True)
+    ## 3.file_name
+    filename = osp.join(direct,f"{frame_time}.npy")
+    np.save(filename,points)
+
+def load_points(frame_time):
+    direct = osp.join(debug_path,"points")
+    filename = osp.join(direct,f"{frame_time}.npy")
+    return np.load(filename)
+
+def save_colors(frame_time,pg_colors):
+    ## 1.tensor->array
+    colors = pg_colors.detach().cpu().numpy()
+    ## 2.mkdir
+    direct = osp.join(debug_path,"colors")
+    if not osp.exists(direct):
+        os.makedirs(direct,exist_ok=True)
+    ## 3.file_name
+    filename = osp.join(direct,f"{frame_time}.npy")
+    np.save(filename,colors)
+
+def load_colors(frame_time):
+    direct = osp.join(debug_path,"colors")
+    filename = osp.join(direct,f"{frame_time}.npy")
+    return np.load(filename)

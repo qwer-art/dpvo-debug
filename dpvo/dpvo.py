@@ -385,6 +385,7 @@ class DPVO:
 
         if self.viewer is not None:
             self.viewer.update_image(image.contiguous())
+        print(f"{tstamp},image: {self.image_.shape},poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")
 
         ## image/intrinsics
         # save_image(tstamp,image)
@@ -401,7 +402,6 @@ class DPVO:
 
         # pred_feature = (fmap, gmap, imap, patches, _, clr)
         # save_features(tstamp,pred_feature)
-        print(f"frame: {tstamp},{image.shape},{intrinsics.shape}")
 
         ### update state attributes ###
         self.tlist.append(tstamp)
@@ -479,3 +479,8 @@ class DPVO:
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc.attempt_loop_closure(self.n)
             self.long_term_lc.lc_callback()
+
+        save_poses(tstamp,self.pg.poses_)
+        save_points(tstamp,self.pg.points_)
+        save_colors(tstamp,self.pg.colors_)
+        print(f"poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")

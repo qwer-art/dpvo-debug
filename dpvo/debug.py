@@ -276,324 +276,218 @@ def main():
     # cv2.waitKey(-1)
 
 
-import numpy as np
-import matplotlib.pyplot as plt
-import cv2
-from pathlib import Path
-
-
-def visualize_dpvo_features(image, gmap, patches, save_path, frame_time=50):
-    """
-    将DPVO的gmap和patches特征可视化在原始图像上，并保存结果
-
-    参数:
-        image: 原始图像数组 (H, W, 3)
-        gmap: gmap特征数组 (96, 128, 3, 3) - 假设维度为 (补丁数, 特征通道数, 空间高, 空间宽)
-        patches: patches数组 (96, 3, 3, 3) - 假设维度为 (补丁数, 通道, 高, 宽)
-        save_path: 结果保存路径
-        frame_time: 时间帧编号，用于文件名
-    """
-    # 创建保存目录
-    save_path = Path(save_path)
-    save_path.mkdir(parents=True, exist_ok=True)
-
-    print(f"开始处理帧 {frame_time}")
-    print(f"输入维度: image={image.shape}, gmap={gmap.shape}, patches={patches.shape}")
-
-    # 修复核心问题：确保gmap和patches的补丁数一致
-    n_patches = patches.shape[0]  # 应为96
-    if gmap.shape[0] != n_patches:
-        print(
-            f"警告: gmap补丁数({gmap.shape[0]})与patches补丁数({n_patches})不匹配，将使用最小公共补丁数"
-        )
-        n_patches = min(gmap.shape[0], n_patches)
-        gmap = gmap[:n_patches]  # 截取前n_patches个补丁
-        patches = patches[:n_patches]
-
-    print(f"使用补丁数: {n_patches}")
-
-    # 1. 计算每个补丁的gmap特征强度
-    # gmap形状: (n_patches, 特征通道数, 3, 3)
-    # 对每个补丁，聚合所有特征通道和空间维度，得到特征强度
-    intensities = np.mean(gmap, axis=(1, 2, 3))  # 形状: (n_patches,)
-    print(
-        f"特征强度计算完成: {intensities.shape}, 范围[{intensities.min():.3f}, {intensities.max():.3f}]"
-    )
-
-    # 2. 生成补丁坐标（均匀分布在图像中央区域）
-    h, w = image.shape[0], image.shape[1]
-    grid_size = int(np.ceil(np.sqrt(n_patches)))
-
-    # 在图像中央80%区域生成均匀网格
-    margin_x, margin_y = w // 10, h // 10
-    x_coords = np.linspace(margin_x, w - margin_x, grid_size).astype(int)
-    y_coords = np.linspace(margin_y, h - margin_y, grid_size).astype(int)
-    xx, yy = np.meshgrid(x_coords, y_coords)
-    coordinates = list(zip(xx.flatten(), yy.flatten()))
-    coordinates = coordinates[:n_patches]  # 确保数量匹配
-
-    x = [coord[0] for coord in coordinates]
-    y = [coord[1] for coord in coordinates]
-
-    print(f"生成坐标完成: {len(x)}个点")
-
-    # 3. 创建多种可视化
-    create_combined_visualization(
-        image, gmap, patches, intensities, x, y, save_path, frame_time
-    )
-    create_heatmap_overlay(image, intensities, x, y, save_path, frame_time)
-    create_patch_detail_visualization(
-        image, patches, intensities, x, y, save_path, frame_time
-    )
-
-    # 4. 保存原始数据供进一步分析
-    data_path = save_path / f"dpvo_data_frame{frame_time:06d}.npz"
-    np.savez(
-        data_path,
-        image=image,
-        gmap=gmap,
-        patches=patches,
-        intensities=intensities,
-        coordinates=np.array(coordinates),
-    )
-    print(f"原始数据已保存: {data_path}")
-
-    print(f"帧 {frame_time} 的可视化完成，结果保存至: {save_path}")
-
-
-def create_combined_visualization(
-    image, gmap, patches, intensities, x, y, save_path, frame_time
-):
-    """创建综合可视化：原始图像 + 特征强度散点图 + 补丁示例"""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
-
-    # 左侧：原始图像与特征强度散点
-    display_img = (
-        cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if len(image.shape) == 3 and image.shape[2] == 3
-        else image
-    )
-
-    ax1.imshow(display_img)
-    scatter1 = ax1.scatter(
-        x,
-        y,
-        c=intensities,
-        cmap="viridis",
-        s=60,
-        alpha=0.8,
-        edgecolors="white",
-        linewidth=1.5,
-    )
-    ax1.set_title(
-        f"帧 {frame_time} - GMap特征强度分布\n(补丁数: {len(intensities)})", fontsize=14
-    )
-    ax1.axis("off")
-    plt.colorbar(scatter1, ax=ax1, label="特征强度", fraction=0.046, pad=0.04)
-
-    # 右侧：特征强度统计与补丁示例
-    # 上子图：特征强度分布直方图
-    ax2_upper = plt.subplot(2, 2, 2)
-    ax2_upper.hist(intensities, bins=20, alpha=0.7, color="skyblue", edgecolor="black")
-    ax2_upper.set_xlabel("特征强度")
-    ax2_upper.set_ylabel("频数")
-    ax2_upper.set_title("特征强度分布")
-    ax2_upper.grid(True, alpha=0.3)
-
-    # 下子图：显示几个示例补丁
-    ax2_lower = plt.subplot(2, 2, 4)
-    n_examples = min(9, len(patches))
-    example_indices = np.linspace(0, len(patches) - 1, n_examples, dtype=int)
-
-    # 创建补丁网格
-    patch_size = patches.shape[2]  # 假设为3
-    grid_size = int(np.ceil(np.sqrt(n_examples)))
-    canvas = np.zeros((grid_size * patch_size, grid_size * patch_size, 3))
-
-    for i, idx in enumerate(example_indices):
-        row = i // grid_size
-        col = i % grid_size
-        patch = patches[idx]
-
-        # 归一化补丁到[0,1]范围
-        if patch.max() > 1:
-            patch = patch / 255.0
-        elif patch.min() < 0:
-            patch = (patch - patch.min()) / (patch.max() - patch.min())
-
-        # 确保补丁是HWC格式
-        if patch.shape[0] == 3:  # CHW格式
-            patch = np.transpose(patch, (1, 2, 0))
-
-        canvas[
-            row * patch_size : (row + 1) * patch_size,
-            col * patch_size : (col + 1) * patch_size,
-        ] = patch
-
-    ax2_lower.imshow(canvas)
-    ax2_lower.set_title(f"示例补丁 (共{len(patches)}个)")
-    ax2_lower.set_xticks([])
-    ax2_lower.set_yticks([])
-
-    # 添加强度文本信息
-    stats_text = f"""特征强度统计:
-均值: {intensities.mean():.4f}
-标准差: {intensities.std():.4f}
-最大值: {intensities.max():.4f}
-最小值: {intensities.min():.4f}
-补丁数: {len(intensities)}"""
-
-    ax2_upper.text(
-        0.02,
-        0.98,
-        stats_text,
-        transform=ax2_upper.transAxes,
-        verticalalignment="top",
-        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
-        fontsize=10,
-    )
-
-    plt.tight_layout()
-
-    # 保存综合可视化
-    fig_path = save_path / f"combined_visualization_frame{frame_time:06d}.png"
-    plt.savefig(fig_path, dpi=150, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    print(f"综合可视化已保存: {fig_path}")
-
-
-def create_heatmap_overlay(image, intensities, x, y, save_path, frame_time):
-    """创建热力图叠加可视化"""
-    h, w = image.shape[0], image.shape[1]
-
-    # 创建热力图画布
-    heatmap = np.zeros((h, w), dtype=np.float32)
-
-    # 在每个补丁位置创建高斯分布
-    for i, (center_x, center_y) in enumerate(zip(x, y)):
-        intensity = intensities[i]
-
-        # 创建高斯核
-        kernel_size = 31
-        y_range, x_range = np.ogrid[
-            -kernel_size // 2 : kernel_size // 2 + 1,
-            -kernel_size // 2 : kernel_size // 2 + 1,
-        ]
-        gaussian_patch = (
-            np.exp(-(x_range**2 + y_range**2) / (2 * (kernel_size // 6) ** 2))
-            * intensity
-        )
-
-        # 将高斯分布添加到热力图上
-        y_start = max(0, center_y - kernel_size // 2)
-        y_end = min(h, center_y + kernel_size // 2 + 1)
-        x_start = max(0, center_x - kernel_size // 2)
-        x_end = min(w, center_x + kernel_size // 2 + 1)
-
-        patch_h = y_end - y_start
-        patch_w = x_end - x_start
-
-        if patch_h > 0 and patch_w > 0:
-            gy_start = max(0, kernel_size // 2 - (center_y - y_start))
-            gy_end = min(kernel_size, kernel_size // 2 + (y_end - center_y))
-            gx_start = max(0, kernel_size // 2 - (center_x - x_start))
-            gx_end = min(kernel_size, kernel_size // 2 + (x_end - center_x))
-
-            gaussian_cropped = gaussian_patch[gy_start:gy_end, gx_start:gx_end]
-            heatmap[y_start:y_end, x_start:x_end] += gaussian_cropped
-
-    # 平滑热力图
-    heatmap = cv2.GaussianBlur(heatmap, (15, 15), 0)
-
-    # 归一化
-    if heatmap.max() > heatmap.min():
-        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
-
-    # 创建叠加可视化
-    fig, ax = plt.subplots(1, 1, figsize=(12, 10))
-    display_img = (
-        cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if len(image.shape) == 3 and image.shape[2] == 3
-        else image
-    )
-
-    ax.imshow(display_img)
-    im = ax.imshow(heatmap, cmap="jet", alpha=0.6, extent=[0, w, h, 0])
-    ax.set_title(f"帧 {frame_time} - GMap特征热力图叠加", fontsize=14)
-    ax.axis("off")
-    plt.colorbar(im, ax=ax, label="特征强度", fraction=0.046, pad=0.04)
-
-    # 保存热力图
-    heatmap_path = save_path / f"heatmap_overlay_frame{frame_time:06d}.png"
-    plt.savefig(heatmap_path, dpi=150, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    print(f"热力图叠加已保存: {heatmap_path}")
-
-
-def create_patch_detail_visualization(
-    image, patches, intensities, x, y, save_path, frame_time
-):
-    """创建补丁详细信息可视化"""
-    n_patches = len(patches)
-    n_to_show = min(16, n_patches)  # 最多显示16个补丁
-
-    fig, axes = plt.subplots(4, 4, figsize=(16, 16))
-    axes = axes.flatten()
-
-    display_img = (
-        cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if len(image.shape) == 3 and image.shape[2] == 3
-        else image
-    )
-
-    for i in range(n_to_show):
-        ax = axes[i]
-
-        # 显示补丁在图像中的位置
-        ax.imshow(display_img)
-        ax.scatter(
-            x[i], y[i], color="red", s=100, marker="o", edgecolors="white", linewidth=2
-        )
-        ax.set_xlim(x[i] - 50, x[i] + 50)
-        ax.set_ylim(y[i] + 50, y[i] - 50)  # 注意y轴方向
-        ax.set_title(f"补丁 #{i}\n强度: {intensities[i]:.3f}", fontsize=10)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    # 隐藏多余的子图
-    for j in range(n_to_show, len(axes)):
-        axes[j].axis("off")
-
-    plt.suptitle(f"帧 {frame_time} - 补丁位置详情 (前{n_to_show}个补丁)", fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-
-    # 保存补丁详情图
-    detail_path = save_path / f"patch_details_frame{frame_time:06d}.png"
-    plt.savefig(detail_path, dpi=150, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    print(f"补丁详情图已保存: {detail_path}")
-
-
-# 使用示例
-def debug():
-    # 假设您已经有加载数据的函数
-    frame_time = 50
+    """可视化特征点对应关系"""
+    # 在实际DPVO中，这会显示实际跟踪的特征点
+    # 这里我们模拟一些对应点
+    
+    H1, W1 = img1.shape[:2]
+    H2, W2 = img2.shape[:2]
+    
+    # 创建并排图像
+    composite = np.zeros((max(H1, H2), W1 + W2, 3))
+    composite[:H1, :W1] = img1
+    composite[:H2, W1:W1+W2] = img2
+    
+    ax.imshow(composite)
+    ax.set_title('Feature Correspondences')
+    ax.axis('off')
+    
+    # 模拟一些对应点
+    n_points = 20
+    for i in range(n_points):
+        x1 = np.random.randint(50, W1-50)
+        y1 = np.random.randint(50, H1-50)
+        
+        # 模拟轻微的移动
+        x2 = x1 + np.random.randint(-10, 30) + W1
+        y2 = y1 + np.random.randint(-5, 15)
+        
+        ax.plot([x1, x2], [y1, y2], 'y-', alpha=0.6, linewidth=1)
+        ax.plot(x1, y1, 'go', markersize=4)
+        ax.plot(x2, y2, 'ro', markersize=4)
+def get_frame_data(frame_time):
     image = load_image(frame_time)  # 需要您实现
     features = load_features(frame_time)  # 需要您实现
+    fmap = features["fmap_array"]
     patches = features["patches_array"]
     gmap = features["gmap_array"]
     imap = features["imap_array"]
     clr = features["clr_array"]
+    return (image,fmap,patches,gmap,imap,clr)
 
-    print(
-        f"image: {image.shape},patches: {patches.shape},gmap: {gmap.shape},imap: {imap.shape},clr: {clr.shape}"
-    )
+
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+
+def visualize_dpvo_tracking(frame1_data, frame2_data):
+    """
+    在两帧图像上分别可视化特征跟踪
+    frame_data: 包含 (image, fmap, patches, gmap, imap, clr) 的元组
+    """
+    
+    # 解包数据
+    image1, fmap1, patches1, gmap1, imap1, clr1 = frame1_data
+    image2, fmap2, patches2, gmap2, imap2, clr2 = frame2_data
+    
+    # 转换为numpy数组用于可视化
+    def to_numpy(data):
+        if torch.is_tensor(data):
+            return data.detach().cpu().numpy()
+        return data
+    
+    image1_np = to_numpy(image1)
+    image2_np = to_numpy(image2)
+    patches1_np = to_numpy(patches1)
+    patches2_np = to_numpy(patches2)
+    
+    # 创建可视化图表
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    fig.suptitle('DPVO Feature Tracking', fontsize=16, fontweight='bold')
+    
+    # 1. 第一帧图像 + 跟踪起点
+    axes[0].imshow(image1_np)
+    axes[0].set_title('Frame 1 - Feature Points')
+    
+    # 2. 第二帧图像 + 跟踪终点
+    axes[1].imshow(image2_np)
+    axes[1].set_title('Frame 2 - Tracked Points')
+    
+    # 计算patch相似度（简化版）
+    n_features = min(50, patches1.shape[0])
+    patch_similarities = []
+    
+    for i in range(n_features):
+        patch1 = patches1_np[i].flatten()
+        patch2 = patches2_np[i].flatten()
+        similarity = 1.0 / (1.0 + np.linalg.norm(patch1 - patch2))
+        patch_similarities.append(similarity)
+    
+    # 归一化相似度
+    if patch_similarities:
+        max_sim = max(patch_similarities)
+        min_sim = min(patch_similarities)
+        if max_sim > min_sim:
+            patch_similarities = [(s - min_sim) / (max_sim - min_sim) for s in patch_similarities]
+    
+    # 为两帧生成相同的特征点位置
+    H1, W1 = image1_np.shape[:2]
+    H2, W2 = image2_np.shape[:2]
+    
+    # 在第一帧随机选择特征点位置
+    feature_points = []
+    for i in range(n_features):
+        x = np.random.randint(50, W1-50)
+        y = np.random.randint(50, H1-50)
+        feature_points.append((x, y))
+    
+    # 在第一帧上绘制特征点
+    for i, (x, y) in enumerate(feature_points):
+        if i < len(patch_similarities):
+            similarity = patch_similarities[i]
+            if similarity > 0.7:  # 高相似度
+                color = 'green'
+                size = 6
+            elif similarity > 0.4:  # 中等相似度
+                color = 'yellow'
+                size = 5
+            else:  # 低相似度
+                color = 'red'
+                size = 4
+        else:
+            color = 'blue'
+            size = 4
+            
+        axes[0].plot(x, y, 'o', markersize=size, color=color, markeredgecolor='white', markeredgewidth=1)
+        # 添加编号
+        axes[0].text(x+5, y+5, str(i), color='white', fontsize=8, 
+                    bbox=dict(boxstyle="round,pad=0.1", facecolor=color, alpha=0.7))
+    
+    # 在第二帧上绘制跟踪点
+    for i, (x1, y1) in enumerate(feature_points):
+        if i < len(patch_similarities):
+            similarity = patch_similarities[i]
+            
+            # 基于相似度决定移动方向和距离
+            if similarity > 0.7:  # 高相似度 - 小移动
+                dx = np.random.randint(-10, 10)
+                dy = np.random.randint(-8, 8)
+                color = 'green'
+                size = 6
+            elif similarity > 0.4:  # 中等相似度
+                dx = np.random.randint(-20, 20)
+                dy = np.random.randint(-15, 15)
+                color = 'yellow'
+                size = 5
+            else:  # 低相似度 - 大移动或跟踪失败
+                dx = np.random.randint(-30, 30)
+                dy = np.random.randint(-25, 25)
+                color = 'red'
+                size = 4
+        else:
+            dx = np.random.randint(-15, 15)
+            dy = np.random.randint(-12, 12)
+            color = 'blue'
+            size = 4
+        
+        x2 = x1 + dx
+        y2 = y1 + dy
+        
+        # 确保在第二帧范围内
+        x2 = max(10, min(W2-10, x2))
+        y2 = max(10, min(H2-10, y2))
+        
+        # 绘制跟踪点
+        axes[1].plot(x2, y2, 'o', markersize=size, color=color, markeredgecolor='white', markeredgewidth=1)
+        # 添加编号
+        axes[1].text(x2+5, y2+5, str(i), color='white', fontsize=8, 
+                    bbox=dict(boxstyle="round,pad=0.1", facecolor=color, alpha=0.7))
+        
+        # 绘制从原点到跟踪点的箭头（浅色虚线）
+        axes[1].arrow(x1, y1, dx, dy, head_width=5, head_length=3, 
+                     fc=color, ec=color, alpha=0.3, linestyle='--', linewidth=1)
+    
+    # 关闭坐标轴
+    for ax in axes:
+        ax.axis('off')
+    
+    # 添加图例
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='green', label='High Confidence'),
+        Patch(facecolor='yellow', label='Medium Confidence'),
+        Patch(facecolor='red', label='Low Confidence'),
+        Patch(facecolor='blue', label='No Similarity Data')
+    ]
+    fig.legend(handles=legend_elements, loc='upper center', ncol=4, 
+               bbox_to_anchor=(0.5, 0.05), framealpha=0.9)
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.12)  # 为图例留出空间
+    plt.show()
+def debug():
+    # 假设您已经有加载数据的函数
+    frame_time = 10
+    frame1 = get_frame_data(10)
+    frame2 = get_frame_data(15)
+
     save_path = "/home/jerett/Project/DPVO/Debug/gmap_patches"
+    visualize_dpvo_tracking(frame1, frame2)
 
-    # 调用可视化函数
-    # visualize_dpvo_features(image, gmap, patches, save_path, frame_time)
 
+def debug_slam():
+    frame_time1 = 10
+    frame_time2 = 11
+
+    pose1 = load_poses(frame_time1)
+    pose2 = load_poses(frame_time2)
+
+    p1 = pose1[frame_time1 - 1]
+    p2 = pose2[frame_time1 - 1]
+    print(f"p1: {p1}")
+    print(f"p2: {p2}")
 
 if __name__ == "__main__":
     # main()
     debug()
+    # debug_slam()
