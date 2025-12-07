@@ -112,6 +112,69 @@ def transform(poses, patches, intrinsics, ii, jj, kk, depth=False, valid=False, 
         
     return x1
 
+def transform_debug(poses, patches, intrinsics, ii, jj, kk, depth=False, valid=False, jacobian=False, tonly=False):
+    """ projective transform """
+
+    # backproject
+    X0 = iproj(patches[:,kk], intrinsics[:,ii])
+
+    # transform
+    Gij = poses[:, jj] * poses[:, ii].inv()
+
+    if tonly:
+        Gij[...,3:] = torch.as_tensor([0,0,0,1], device=Gij.device)
+
+    X1 = Gij[:,:,None,None] * X0
+
+    # project
+    x1 = proj(X1, intrinsics[:,jj], depth)
+
+
+    if jacobian:
+        p = X1.shape[2]
+        X, Y, Z, H = X1[...,p//2,p//2,:].unbind(dim=-1)
+        o = torch.zeros_like(H)
+        i = torch.zeros_like(H)
+
+        fx, fy, cx, cy = intrinsics[:,jj].unbind(dim=-1)
+
+        d = torch.zeros_like(Z)
+        d[Z.abs() > 0.2] = 1.0 / Z[Z.abs() > 0.2]
+
+        if isinstance(Gij, SE3):
+            Ja = torch.stack([
+                H,  o,  o,  o,  Z, -Y,
+                o,  H,  o, -Z,  o,  X,
+                o,  o,  H,  Y, -X,  o,
+                o,  o,  o,  o,  o,  o,
+            ], dim=-1).view(1, len(ii), 4, 6)
+
+        elif isinstance(Gij, Sim3):
+            Ja = torch.stack([
+                H,  o,  o,  o,  Z, -Y,  X,
+                o,  H,  o, -Z,  o,  X,  Y,
+                o,  o,  H,  Y, -X,  o,  Z,
+                o,  o,  o,  o,  o,  o,  o,
+            ], dim=-1).view(1, len(ii), 4, 7)
+        
+        Jp = torch.stack([
+             fx*d,     o, -fx*X*d*d,  o,
+                o,  fy*d, -fy*Y*d*d,  o,
+        ], dim=-1).view(1, len(ii), 2, 4)
+
+        Jj = torch.matmul(Jp, Ja)
+        Ji = -Gij[:,:,None].adjT(Jj)
+        
+        Jz = torch.matmul(Jp, Gij.matrix()[...,:,3:])
+
+        return x1, (Z > 0.2).float(), (Ji, Jj, Jz)
+
+    if valid:
+        return x1, (X1[...,2] > 0.2).float()
+        
+    return x1
+
+
 def point_cloud(poses, patches, intrinsics, ix):
     """ generate point cloud from patches """
     return poses[:,ix,None,None].inv() * iproj(patches, intrinsics[:,ix])

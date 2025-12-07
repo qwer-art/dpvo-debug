@@ -284,6 +284,10 @@ class SE3(LieGroup):
         t = t * s.unsqueeze(-1)
         return SE3(torch.cat([t, q], dim=-1))
 
+    def __repr__(self):
+        t = self.data[..., :3]
+        q = self.data[..., 3:]
+        return f"SE3,t: {t},q: {q}"
 
 class Sim3(LieGroup):
     group_name = 'Sim3'

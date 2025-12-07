@@ -4,6 +4,7 @@ import os.path as osp
 import os
 import cv2
 import pickle
+import json
 debug_path = "/home/jerett/Project/DPVO/Debug"
 
 def load_image(frame_time):
@@ -86,6 +87,22 @@ def load_poses(frame_time):
     filename = osp.join(direct,f"{frame_time}.npy")
     return np.load(filename)
 
+def save_patches(frame_time,pg_patches):
+    ## 1.tensor->array
+    pg_patches = pg_patches.detach().cpu().numpy()
+    ## 2.mkdir
+    direct = osp.join(debug_path,"patches")
+    if not osp.exists(direct):
+        os.makedirs(direct,exist_ok=True)
+    ## 3.file_name
+    filename = osp.join(direct,f"{frame_time}.npy")
+    np.save(filename,pg_patches)
+
+def load_patches(frame_time):
+    direct = osp.join(debug_path,"patches")
+    filename = osp.join(direct,f"{frame_time}.npy")
+    return np.load(filename)
+
 def save_points(frame_time,pg_points):
     ## 1.tensor->array
     points = pg_points.detach().cpu().numpy()
@@ -117,3 +134,35 @@ def load_colors(frame_time):
     direct = osp.join(debug_path,"colors")
     filename = osp.join(direct,f"{frame_time}.npy")
     return np.load(filename)
+
+def save_tstamp(frame_time,tstamps):
+    ## 1.tensor->array
+    if isinstance(tstamps, torch.Tensor):
+        tstamps = tstamps.detach().cpu().numpy()
+    ## 2.mkdir
+    direct = osp.join(debug_path,"tstamps")
+    if not osp.exists(direct):
+        os.makedirs(direct,exist_ok=True)
+    ## 3.file_name
+    filename = osp.join(direct,f"{frame_time}.npy")
+    np.save(filename,tstamps)
+
+def load_tstamp(frame_time):
+    direct = osp.join(debug_path,"tstamps")
+    filename = osp.join(direct,f"{frame_time}.npy")
+    return np.load(filename)
+
+def save_simple_dict(frame_time,simple_dict):
+    direct = osp.join(debug_path,"simple_dict")
+    if not osp.exists(direct):
+        os.makedirs(direct,exist_ok=True)
+    filename = osp.join(direct,f"{frame_time}.json")
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(simple_dict, f)
+
+def load_simple_dict(frame_time):
+    direct = osp.join(debug_path,"simple_dict")
+    filename = osp.join(direct,f"{frame_time}.json")
+    with open(filename, 'r', encoding='utf-8') as f:
+        simple_dict = json.load(f)
+    return simple_dict

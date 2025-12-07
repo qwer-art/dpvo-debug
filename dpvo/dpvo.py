@@ -211,6 +211,13 @@ class DPVO:
         (ii, jj, kk) = indicies if indicies is not None else (self.pg.ii, self.pg.jj, self.pg.kk)
         coords = pops.transform(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk)
         return coords.permute(0, 1, 4, 2, 3).contiguous()
+    
+    def reproject_debug(self, indicies=None):
+        """ reproject patch k from i -> j """
+        (ii, jj, kk) = indicies if indicies is not None else (self.pg.ii, self.pg.jj, self.pg.kk)
+        # coords = pops.transform(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk)
+        coords = pops.transform_debug(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk)
+        return coords.permute(0, 1, 4, 2, 3).contiguous()
 
     def append_factors(self, ii, jj):
         self.pg.jj = torch.cat([self.pg.jj, jj])
@@ -244,7 +251,8 @@ class DPVO:
         ii = self.ix[kk]
 
         net = torch.zeros(1, len(ii), self.DIM, **self.kwargs)
-        coords = self.reproject(indicies=(ii, jj, kk))
+        # coords = self.reproject(indicies=(ii, jj, kk))
+        coords = self.reproject_debug(indicies=(ii, jj, kk))
 
         with autocast(enabled=self.cfg.MIXED_PRECISION):
             corr = self.corr(coords, indicies=(kk, jj))
@@ -359,6 +367,41 @@ class DPVO:
             points = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3)
             self.pg.points_[:len(points)] = points[:]
 
+    def update_debug(self):
+        with Timer("other", enabled=self.enable_timing):
+            coords = self.reproject_debug()
+
+            with autocast(enabled=True):
+                corr = self.corr(coords)
+                ctx = self.imap[:, self.pg.kk % (self.M * self.pmem)]
+                self.pg.net, (delta, weight, _) = \
+                    self.network.update(self.pg.net, ctx, corr, None, self.pg.ii, self.pg.jj, self.pg.kk)
+
+            lmbda = torch.as_tensor([1e-4], device="cuda")
+            weight = weight.float()
+            target = coords[...,self.P//2,self.P//2] + delta.float()
+
+        self.pg.target = target
+        self.pg.weight = weight
+
+        with Timer("BA", enabled=self.enable_timing):
+            try:
+                # run global bundle adjustment if there exist long-range edges
+                if (self.pg.ii < self.n - self.cfg.REMOVAL_WINDOW - 1).any() and not self.ran_global_ba[self.n]:
+                    self.__run_global_BA()
+                else:
+                    t0 = self.n - self.cfg.OPTIMIZATION_WINDOW if self.is_initialized else 1
+                    t0 = max(t0, 1)
+                    fastba.BA(self.poses, self.patches, self.intrinsics,
+                        target, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
+            except:
+                print("Warning BA failed...")
+
+            points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
+            points = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3)
+            self.pg.points_[:len(points)] = points[:]
+
+
     def __edges_forw(self):
         r=self.cfg.PATCH_LIFETIME
         t0 = self.M * max((self.n - r), 0)
@@ -385,7 +428,7 @@ class DPVO:
 
         if self.viewer is not None:
             self.viewer.update_image(image.contiguous())
-        print(f"{tstamp},image: {self.image_.shape},poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")
+        # print(f"{tstamp},image: {self.image_.shape},poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")
 
         ## image/intrinsics
         # save_image(tstamp,image)
@@ -445,7 +488,7 @@ class DPVO:
         self.fmap1_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 1, 1)
         self.fmap2_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 4, 4)
 
-        self.counter += 1        
+        self.counter += 1       
         if self.n > 0 and not self.is_initialized:
             if self.motion_probe() < 2.0:
                 self.pg.delta[self.counter - 1] = (self.counter - 2, Id[0])
@@ -474,13 +517,113 @@ class DPVO:
 
         elif self.is_initialized:
             self.update()
+            # self.update_debug()
             self.keyframe()
 
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc.attempt_loop_closure(self.n)
             self.long_term_lc.lc_callback()
+        
+        # region debug
+        index = self.n - 1
+        pg_tstamp = self.pg.tstamps_[index]
+        pg_pose = self.pg.poses_[index]
+        # print(f"tstamp: {tstamp},index: {index},pg_stamp: {pg_tstamp},pose: {pg_pose}")
+        # endregion
 
-        save_poses(tstamp,self.pg.poses_)
-        save_points(tstamp,self.pg.points_)
-        save_colors(tstamp,self.pg.colors_)
-        print(f"poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")
+        save_patches(tstamp,self.pg.patches_)
+        print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
+
+        # Visualize patches on current frame
+        self.visualize_patches(tstamp, image, self.pg.patches_[self.n-1])
+        # simple_dict = {
+        #     "pmem" : self.pg.pmem,
+        #     "DIM" : self.pg.DIM,
+        #     "n" : self.n,
+        #     "m" : self.m,
+        #     "M" : self.M,
+        #     "N" : self.N
+        # }
+        # save_simple_dict(tstamp,simple_dict)
+        # save_tstamp(tstamp,self.pg.tstamps_)
+        # save_poses(tstamp,self.pg.poses_)
+        # save_points(tstamp,self.pg.points_)
+        # save_colors(tstamp,self.pg.colors_)
+        # print(f"tstamp: {tstamp}")
+        # print(f"tstamp: {tstamp},n: {self.pg.n},m: {self.pg.m},M: {self.pg.M},N: {self.pg.N},poses: {array_save_poses.shape},points: {array_save_points.shape},colors: {array_save_colors.shape}")
+
+    def initialized(self, tstamp, image, intrinsics):
+        if self.is_initialized:
+            return
+        ### 1.extract feature ###
+        image = 2 * (image[None,None] / 255.0) - 0.5
+        with autocast(enabled=self.cfg.MIXED_PRECISION):
+            fmap, gmap, imap, patches, _, clr = \
+                self.network.patchify(image,
+                    patches_per_image=self.cfg.PATCHES_PER_FRAME, 
+                    centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
+                    return_color=True)
+        ### 2.update state attributes ###
+        print(f"=== frame,tstamp: {tstamp},n: {self.n},counter: {self.counter} ===")
+        print(f"image: {image.shape}")
+        print(f"fmap: {fmap.shape}")
+        print(f"gmap: {gmap.shape}")
+        print(f"imap: {imap.shape}")
+        print(f"patches: {patches.shape}")
+        print(f"clr: {clr.shape}")
+        self.tlist.append(tstamp)
+        self.pg.tstamps_[self.n] = self.counter
+        self.pg.intrinsics_[self.n] = intrinsics / self.RES
+
+        # color info for visualization
+        clr = (clr[0,:,[2,1,0]] + 0.5) * (255.0 / 2)
+        self.pg.colors_[self.n] = clr.to(torch.uint8)
+
+        self.pg.index_[self.n + 1] = self.n + 1
+        self.pg.index_map_[self.n + 1] = self.m + self.M
+
+        ### 3.depth linear ###
+        if self.n > 1:
+            if self.cfg.MOTION_MODEL == 'DAMPED_LINEAR':
+                P1 = SE3(self.pg.poses_[self.n-1])
+                P2 = SE3(self.pg.poses_[self.n-2])
+                print(f"P1: {P1},P2: {P2}")
+
+                # To deal with varying camera hz
+                *_, a,b,c = [1]*3 + self.tlist
+                fac = (c-b) / (b-a)
+
+                xi = self.cfg.MOTION_DAMPING * fac * (P1 * P2.inv()).log()
+                tvec_qvec = (SE3.exp(xi) * P1).data
+                self.pg.poses_[self.n] = tvec_qvec
+
+        ### 4.depth initialization ###
+        patches[:,:,2] = torch.rand_like(patches[:,:,2,0,0,None,None])
+        self.pg.patches_[self.n] = patches
+
+        ### update network attributes ###
+        self.imap_[self.n % self.pmem] = imap.squeeze()
+        self.gmap_[self.n % self.pmem] = gmap.squeeze()
+        self.fmap1_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 1, 1)
+        self.fmap2_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 4, 4)
+
+        self.counter += 1        
+        if self.n > 0 and not self.is_initialized:
+            if self.motion_probe() < 2.0:
+                self.pg.delta[self.counter - 1] = (self.counter - 2, Id[0])
+                return
+        self.n += 1
+        self.m += self.M
+
+        ### 5.Add forward and backward factors ###
+        self.append_factors(*self.__edges_forw())
+        self.append_factors(*self.__edges_back())
+
+        ### 6.Init ###
+        if self.n == 8 and not self.is_initialized:
+            self.is_initialized = True
+
+            for itr in range(12):
+                print(f"{itr}/12")
+                self.update()
+
