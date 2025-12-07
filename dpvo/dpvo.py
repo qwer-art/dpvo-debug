@@ -557,16 +557,106 @@ class DPVO:
     def debug_extract(self, tstamp, image, intrinsics):
 
         print(f"============= frame_time: {tstamp} ===============")
+        # Store original image for visualization
+        original_image = image.clone()
+
         image = 2 * (image[None,None] / 255.0) - 0.5
         patches_per_frame = 96
-        centroid_sel_strat = 'GRADIENT_BIAS'
+        centroid_sel_strat = 'RANDOM'
 
         with autocast(enabled=self.cfg.MIXED_PRECISION):
-            fmap, gmap, imap, patches, _, clr = \
-                self.network.patchify(image,
-                    patches_per_image=patches_per_frame, 
-                    centroid_sel_strat=centroid_sel_strat, 
+            fmap, gmap, imap, patches, _, clr, coords = \
+                self.network.patchify.debug(image,
+                    patches_per_image=patches_per_frame,
+                    centroid_sel_strat=centroid_sel_strat,
                     return_color=True)
+
+        # Visualize coordinates on original image and save
+        self.visualize_coords_on_image(tstamp, original_image, coords)
+
+    def visualize_coords_on_image(self, tstamp, image, coords):
+        """Visualize extracted coordinates on the original image"""
+        import os
+        import cv2
+        import numpy as np
+
+        # Convert original image to proper format for visualization
+        # The original image should be in [H, W, 3] format with values 0-255
+        if isinstance(image, np.ndarray):
+            vis_image = image.copy()
+        else:
+            # Handle tensor input - convert from CPU tensor to numpy
+            vis_image = image.cpu().numpy()
+
+        # Ensure image is in HWC format and correct data type
+        if len(vis_image.shape) == 3 and vis_image.shape[0] == 3:  # CHW format
+            vis_image = np.transpose(vis_image, (1, 2, 0))  # Convert to HWC
+
+        # Convert to uint8 and ensure proper range
+        if vis_image.dtype != np.uint8:
+            # If values are in 0-1 range, scale to 0-255
+            if vis_image.max() <= 1.0:
+                vis_image = (vis_image * 255).astype(np.uint8)
+            else:
+                vis_image = np.clip(vis_image, 0, 255).astype(np.uint8)
+
+        # Get coordinates for the first frame
+        frame_coords = coords[0].cpu().numpy()  # Shape: [patches_per_frame, 2]
+
+        # Scale coordinates back to original image resolution
+        # The coords are in feature space (1/4 resolution), so scale by 4
+        h, w = vis_image.shape[:2]
+        frame_coords[:, 0] = frame_coords[:, 0] * 4  # x coordinate
+        frame_coords[:, 1] = frame_coords[:, 1] * 4  # y coordinate
+
+        # Draw coordinates as circles on the image
+        for i, (x, y) in enumerate(frame_coords):
+            if 0 <= x < w and 0 <= y < h:  # Ensure coordinates are within image bounds
+                # Draw small circle with different colors for visibility
+                cv2.circle(vis_image, (int(x), int(y)), 2, (0, 255, 0), -1)  # Green circles
+                # Optional: add a small border around each point
+                cv2.circle(vis_image, (int(x), int(y)), 3, (255, 255, 255), 1)  # White border
+
+        # Add text showing the number of feature points
+        num_points = len(frame_coords)
+        text = f"Feature Points: {num_points}"
+        text_position = (10, 30)  # Top-left corner
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1
+        font_thickness = 2
+
+        # Add text with background for better visibility
+        text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+        cv2.rectangle(vis_image,
+                     (text_position[0] - 5, text_position[1] - text_size[1] - 5),
+                     (text_position[0] + text_size[0] + 5, text_position[1] + 5),
+                     (0, 0, 0), -1)  # Black background
+        cv2.putText(vis_image, text, text_position, font, font_scale, (255, 255, 255), font_thickness)  # White text
+
+        # Add frame timestamp
+        timestamp_text = f"Frame: {tstamp}"
+        timestamp_position = (10, 70)  # Below the feature points text
+        cv2.rectangle(vis_image,
+                     (timestamp_position[0] - 5, timestamp_position[1] - text_size[1] - 5),
+                     (timestamp_position[0] + cv2.getTextSize(timestamp_text, font, font_scale, font_thickness)[0][0] + 5, timestamp_position[1] + 5),
+                     (0, 0, 0), -1)  # Black background
+        cv2.putText(vis_image, timestamp_text, timestamp_position, font, font_scale, (255, 255, 255), font_thickness)  # White text
+
+        # Create debug directory if it doesn't exist
+        debug_dir = "/home/jerett/Project/DPVO/Debug/coords"
+        os.makedirs(debug_dir, exist_ok=True)
+
+        # Save the visualization using RGB format (correct version)
+        output_image = vis_image.copy()
+
+        # Create 8-digit padded frame ID
+        frame_id = f"{int(tstamp):08d}"
+        output_path = os.path.join(debug_dir, f"{frame_id}.png")
+
+        cv2.imwrite(output_path, output_image)
+
+        print(f"Saved coordinate visualization to: {output_path}")
+        print(f"Visualized {num_points} coordinates on frame {frame_id}")
 
     def initialized(self, tstamp, image, intrinsics):
         if self.is_initialized:

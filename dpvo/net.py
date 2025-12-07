@@ -157,6 +157,57 @@ class Patchifier(nn.Module):
 
         return fmap, gmap, imap, patches, index
 
+    def debug(self, images, patches_per_image=80, disps=None, centroid_sel_strat='RANDOM', return_color=False):
+        """ extract patches from input images """
+        fmap = self.fnet(images) / 4.0
+        imap = self.inet(images) / 4.0
+
+        b, n, c, h, w = fmap.shape
+        P = self.patch_size
+
+        # bias patch selection towards regions with high gradient
+        if centroid_sel_strat == 'GRADIENT_BIAS':
+            g = self.__image_gradient(images)
+            x = torch.randint(1, w-1, size=[n, 3*patches_per_image], device="cuda")
+            y = torch.randint(1, h-1, size=[n, 3*patches_per_image], device="cuda")
+
+            coords = torch.stack([x, y], dim=-1).float()
+            g = altcorr.patchify(g[0,:,None], coords, 0).view(n, 3 * patches_per_image)
+
+            ix = torch.argsort(g, dim=1)
+            x = torch.gather(x, 1, ix[:, -patches_per_image:])
+            y = torch.gather(y, 1, ix[:, -patches_per_image:])
+
+        elif centroid_sel_strat == 'RANDOM':
+            x = torch.randint(1, w-1, size=[n, patches_per_image], device="cuda")
+            y = torch.randint(1, h-1, size=[n, patches_per_image], device="cuda")
+
+        else:
+            raise NotImplementedError(f"Patch centroid selection not implemented: {centroid_sel_strat}")
+
+        coords = torch.stack([x, y], dim=-1).float()
+        imap = altcorr.patchify(imap[0], coords, 0).view(b, -1, DIM, 1, 1)
+        gmap = altcorr.patchify(fmap[0], coords, P//2).view(b, -1, 128, P, P)
+        print(f"coords: {coords.shape},imap: {imap.shape},gmap: {gmap.shape}")
+
+        if return_color:
+            clr = altcorr.patchify(images[0], 4*(coords + 0.5), 0).view(b, -1, 3)
+
+        if disps is None:
+            disps = torch.ones(b, n, h, w, device="cuda")
+
+        grid, _ = coords_grid_with_index(disps, device=fmap.device)
+        patches = altcorr.patchify(grid[0], coords, P//2).view(b, -1, 3, P, P)
+
+        index = torch.arange(n, device="cuda").view(n, 1)
+        index = index.repeat(1, patches_per_image).reshape(-1)
+
+        if return_color:
+            return fmap, gmap, imap, patches, index, clr, coords
+
+        return fmap, gmap, imap, patches, index, coords
+
+
 
 class CorrBlock:
     def __init__(self, fmap, gmap, radius=3, dropout=0.2, levels=[1,4]):
