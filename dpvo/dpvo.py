@@ -442,6 +442,8 @@ class DPVO:
                     patches_per_image=self.cfg.PATCHES_PER_FRAME, 
                     centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
                     return_color=True)
+            
+        print(f"ts: {tstamp},image: {image.shape},fmap: {fmap.shape},gmap: {gmap.shape},imap: {imap.shape},patches: {patches.shape},clr: {clr.shape}")
 
         # pred_feature = (fmap, gmap, imap, patches, _, clr)
         # save_features(tstamp,pred_feature)
@@ -525,17 +527,17 @@ class DPVO:
             self.long_term_lc.lc_callback()
         
         # region debug
-        index = self.n - 1
-        pg_tstamp = self.pg.tstamps_[index]
-        pg_pose = self.pg.poses_[index]
+        # index = self.n - 1
+        # pg_tstamp = self.pg.tstamps_[index]
+        # pg_pose = self.pg.poses_[index]
         # print(f"tstamp: {tstamp},index: {index},pg_stamp: {pg_tstamp},pose: {pg_pose}")
         # endregion
 
-        save_patches(tstamp,self.pg.patches_)
+        # save_patches(tstamp,self.pg.patches_)
         print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
 
-        # Visualize patches on current frame
-        self.visualize_patches(tstamp, image, self.pg.patches_[self.n-1])
+        # Visualize feature points from network output
+
         # simple_dict = {
         #     "pmem" : self.pg.pmem,
         #     "DIM" : self.pg.DIM,
@@ -551,6 +553,20 @@ class DPVO:
         # save_colors(tstamp,self.pg.colors_)
         # print(f"tstamp: {tstamp}")
         # print(f"tstamp: {tstamp},n: {self.pg.n},m: {self.pg.m},M: {self.pg.M},N: {self.pg.N},poses: {array_save_poses.shape},points: {array_save_points.shape},colors: {array_save_colors.shape}")
+
+    def debug_extract(self, tstamp, image, intrinsics):
+
+        print(f"============= frame_time: {tstamp} ===============")
+        image = 2 * (image[None,None] / 255.0) - 0.5
+        patches_per_frame = 96
+        centroid_sel_strat = 'GRADIENT_BIAS'
+
+        with autocast(enabled=self.cfg.MIXED_PRECISION):
+            fmap, gmap, imap, patches, _, clr = \
+                self.network.patchify(image,
+                    patches_per_image=patches_per_frame, 
+                    centroid_sel_strat=centroid_sel_strat, 
+                    return_color=True)
 
     def initialized(self, tstamp, image, intrinsics):
         if self.is_initialized:

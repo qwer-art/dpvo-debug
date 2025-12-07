@@ -165,3 +165,4 @@ thirdparty/*
 .idea/
 movies
 Debug/
+*.ply
