@@ -7,6 +7,53 @@ import os
 from datetime import datetime
 import cv2  # For visualization
 
+def get_jet_color(value):
+    """
+    Generate enhanced jet color based on normalized value [0, 1].
+
+    Args:
+        value (float): Normalized value between 0 and 1
+
+    Returns:
+        tuple: BGR color tuple (blue, green, red)
+    """
+    # Clamp value to [0, 1]
+    value = max(0.0, min(1.0, value))
+
+    # Enhanced jet colormap with better contrast
+    if value < 0.2:
+        # Deep Blue to Blue
+        t = value / 0.2
+        r = 0
+        g = 0
+        b = int(128 + 127 * t)  # 128 -> 255
+    elif value < 0.4:
+        # Blue to Cyan
+        t = (value - 0.2) / 0.2
+        r = 0
+        g = int(255 * t)  # 0 -> 255
+        b = 255
+    elif value < 0.6:
+        # Cyan to Green
+        t = (value - 0.4) / 0.2
+        r = 0
+        g = 255
+        b = int(255 * (1 - t))  # 255 -> 0
+    elif value < 0.8:
+        # Green to Yellow
+        t = (value - 0.6) / 0.2
+        r = int(255 * t)  # 0 -> 255
+        g = 255
+        b = 0
+    else:
+        # Yellow to Red
+        t = (value - 0.8) / 0.2
+        r = 255
+        g = int(255 * (1 - t))  # 255 -> 0
+        b = 0
+
+    return (b, g, r)  # Return as BGR for OpenCV
+
 from . import altcorr, fastba, lietorch
 from . import projective_ops as pops
 from .lietorch import SE3
@@ -753,6 +800,121 @@ class DPVO:
 
         image_bgr_left = original_image.cpu().permute(1, 2, 0).numpy()
         image_bgr_right = image_bgr_left.copy()
+
+        ## 1.可视化左侧图像
+        # 1.1 显示相机时间戳
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        font_thickness = 2
+        text_color = (255, 255, 255)  # 白色文字
+        bg_color = (0, 0, 0)  # 黑色背景
+
+        # 添加时间戳文本
+        timestamp_text = f"Timestamp: {tstamp}"
+        text_size = cv2.getTextSize(timestamp_text, font, font_scale, font_thickness)[0]
+        cv2.rectangle(image_bgr_left, (10, 10), (10 + text_size[0] + 10, 10 + text_size[1] + 10), bg_color, -1)
+        cv2.putText(image_bgr_left, timestamp_text, (15, 30), font, font_scale, text_color, font_thickness)
+
+        # 1.2 显示关键帧信息
+        # 计算关键帧数量：在DPVO中，self.n表示当前存储的关键帧数量
+        # keyframe()函数会删除非关键帧，所以self.n就是关键帧数量
+        keyframe_count = self.n
+        keyframe_text = f"Keyframes: {keyframe_count}"
+        text_size_kf = cv2.getTextSize(keyframe_text, font, font_scale, font_thickness)[0]
+        cv2.rectangle(image_bgr_left, (10, 45), (10 + text_size_kf[0] + 10, 45 + text_size_kf[1] + 10), bg_color, -1)
+        cv2.putText(image_bgr_left, keyframe_text, (15, 65), font, font_scale, (255, 255, 255), font_thickness)
+
+        # 1.3 可视化当前帧提取的关键点
+        if self.m > 0 and hasattr(self, 'pg') and hasattr(self.pg, 'patches_') and self.pg.patches_ is not None:
+            # 获取当前帧的关键点坐标和深度
+            current_frame_idx = self.n - 1 if self.n > 0 and self.n <= len(self.pg.patches_) else 0
+
+            if current_frame_idx < len(self.pg.patches_):
+                # 提取当前帧的patches
+                current_patches = self.pg.patches_[current_frame_idx]  # [M, 3, 3, 3]
+
+                # 获取关键点坐标 (patches的中心位置)
+                # patches格式: [x, y, depth] 在3x3的patch网格中
+                keypoints = current_patches[:, :2, 1, 1]  # [M, 2] (x, y坐标)
+
+                # 获取深度信息 (逆深度)
+                inv_depths = current_patches[:, 2, 1, 1]  # [M]
+
+                # 转换为深度值（深度 = 1 / 逆深度）
+                depths = 1.0 / inv_depths
+
+                # 过滤有效的深度值
+                valid_mask = (depths > 0.2) & (depths < 50.0)  # 深度范围0.2m到50m
+
+                # 显示关键点数量
+                total_keypoints = len(keypoints)
+                valid_keypoints_count = valid_mask.sum().item()
+                keypoints_text = f"Keypoints: {valid_keypoints_count}/{total_keypoints}"
+                text_size_kp = cv2.getTextSize(keypoints_text, font, font_scale, font_thickness)[0]
+                cv2.rectangle(image_bgr_left, (10, 80), (10 + text_size_kp[0] + 10, 80 + text_size_kp[1] + 10), bg_color, -1)
+                cv2.putText(image_bgr_left, keypoints_text, (15, 100), font, font_scale, (255, 255, 255), font_thickness)
+
+                if valid_keypoints_count > 0:
+                    valid_depths = depths[valid_mask]
+                    valid_keypoints = keypoints[valid_mask]
+
+                    # 使用深度值而不是逆深度值进行颜色映射
+                    depth_min = valid_depths.min().item()
+                    depth_max = valid_depths.max().item()
+                    depth_range = depth_max - depth_min
+
+                    if depth_range > 0:
+                        normalized_depths = (valid_depths - depth_min) / depth_range
+                    else:
+                        normalized_depths = torch.zeros_like(valid_depths)
+
+                    # 均匀采样10个点用于深度值标注
+                    num_samples = min(10, valid_keypoints_count)
+                    if valid_keypoints_count > 0:
+                        # 计算采样间隔
+                        if valid_keypoints_count <= 10:
+                            sample_indices = list(range(valid_keypoints_count))
+                        else:
+                            step = valid_keypoints_count // 10
+                            sample_indices = [i * step for i in range(10)]
+
+                        sample_idx = 0
+                        # 应用jet颜色映射
+                        for i, (kp, depth_norm, depth_val) in enumerate(zip(valid_keypoints, normalized_depths, valid_depths)):
+                            x, y = kp.cpu().numpy()
+
+                            # 缩放坐标到原始图像分辨率
+                            # patches坐标可能是在下采样后的特征空间中，需要乘以RES缩放因子
+                            x_scaled = int(x * self.RES)
+                            y_scaled = int(y * self.RES)
+
+                            # 确保坐标在图像范围内
+                            if 0 <= x_scaled < image_bgr_left.shape[1] and 0 <= y_scaled < image_bgr_left.shape[0]:
+                                # 使用jet颜色映射（基于深度值），增强对比度
+                                color = get_jet_color(depth_norm.item())
+
+                                # 绘制更大的关键点以提高可见性
+                                # 先绘制黑色背景圆
+                                cv2.circle(image_bgr_left, (x_scaled, y_scaled), 6, (0, 0, 0), -1)
+                                # 再绘制彩色圆
+                                cv2.circle(image_bgr_left, (x_scaled, y_scaled), 5, color, -1)
+                                # 添加白色边框
+                                cv2.circle(image_bgr_left, (x_scaled, y_scaled), 6, (255, 255, 255), 1)
+
+                                # 对于采样点，添加深度值标注，增强可见性
+                                if sample_idx < len(sample_indices) and i == sample_indices[sample_idx]:
+                                    depth_text = f"{depth_val.item():.1f}m"
+
+                                    # 添加黑色背景让文字更清晰
+                                    (text_w, text_h), _ = cv2.getTextSize(depth_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                                    cv2.rectangle(image_bgr_left,
+                                                (x_scaled + 10, y_scaled - text_h - 5),
+                                                (x_scaled + 10 + text_w, y_scaled + 5),
+                                                (0, 0, 0), -1)
+
+                                    cv2.putText(image_bgr_left, depth_text, (x_scaled + 10, y_scaled),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)  # 加粗红色文字
+                                    sample_idx += 1
 
         frame_bgr = np.hstack([image_bgr_left,image_bgr_right])
         # Save combined visualization
