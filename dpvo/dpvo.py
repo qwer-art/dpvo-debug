@@ -625,56 +625,8 @@ class DPVO:
         # save_patches(tstamp,self.pg.patches_)
         # print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
 
-        # Print frame statistics
-        print(f"\n[FRAME STATS] Timestamp: {tstamp}")
-
-        # 1. Count valid poses
-        valid_poses = 0
-        if hasattr(self, 'poses') and self.poses is not None:
-            for i in range(min(self.n, self.poses.shape[1])):
-                pose = self.poses[0, i] if self.poses.dim() == 3 else self.poses[i]
-                if i == 0:
-                    valid_poses += 1  # First frame is always valid (origin)
-                else:
-                    # Check if pose is not identity
-                    if not torch.allclose(pose[3:7], torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device)):
-                        valid_poses += 1
-
-        print(f"  Valid poses: {valid_poses}")
-
-        # 2. Print point cloud count
-        total_points = self.m  # Total points
-        print(f"  Total points: {total_points}")
-
-        # 3. Count valid 3D points based on inverse depth range (0.02-5)
-        valid_3d_points = 0
-        if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
-            # self.patches shape is [1, m, 3, P, P], we need the center pixel of each patch
-            # Extract center pixel (1,1) from each patch's depth channel
-            inv_depths = self.patches[0, :self.m, 2, 1, 1]  # Shape: [m]
-            # Count points with inverse depth in valid range
-            valid_mask = (inv_depths >= 0.02) & (inv_depths <= 5.0)
-            valid_3d_points = valid_mask.sum().item()
-
-        print(f"  Valid 3D points: {valid_3d_points}")
-
-        # 4. Calculate and print inverse depth range
-        if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
-            # Extract center pixel of each patch
-            inv_depths = self.patches[0, :self.m, 2, 1, 1]  # Shape: [m]
-            # Clamp to valid range for display
-            inv_depth_min = torch.clamp(inv_depths.min(), 0.02, 5.0).item()
-            inv_depth_max = torch.clamp(inv_depths.max(), 0.02, 5.0).item()
-            print(f"  Inverse depth - min: {inv_depth_min:.6f}, max: {inv_depth_max:.6f}")
-
-            # 5. Calculate and print corresponding depth range
-            valid_inv_depths = inv_depths[(inv_depths >= 0.02) & (inv_depths <= 5.0)]
-            if len(valid_inv_depths) > 0:
-                depths = 1.0 / valid_inv_depths
-                # Clamp to 0.2-50m for display
-                depth_min = torch.clamp(depths.min(), 0.2, 50.0).item()
-                depth_max = torch.clamp(depths.max(), 0.2, 50.0).item()
-                print(f"  Depth - min: {depth_min:.6f}m, max: {depth_max:.6f}m")
+        # Print frame statistics using dedicated function
+        self.print_frame_statistics(tstamp)
 
         # Visualize feature points from network output
 
@@ -693,6 +645,103 @@ class DPVO:
         # save_colors(tstamp,self.pg.colors_)
         # print(f"tstamp: {tstamp}")
         # print(f"tstamp: {tstamp},n: {self.pg.n},m: {self.pg.m},M: {self.pg.M},N: {self.pg.N},poses: {array_save_poses.shape},points: {array_save_points.shape},colors: {array_save_colors.shape}")
+
+    def print_frame_statistics(self, tstamp):
+        """
+        Print comprehensive frame statistics including poses, points, and depth information.
+
+        Args:
+            tstamp: Timestamp of the current frame
+        """
+        print(f"\n[FRAME STATS] Timestamp: {tstamp}")
+
+        # 1. Count valid poses
+        valid_poses = 0
+        if hasattr(self, 'poses') and self.poses is not None:
+            for i in range(min(self.n, self.poses.shape[1])):
+                pose = self.poses[0, i] if self.poses.dim() == 3 else self.poses[i]
+                if i == 0:
+                    valid_poses += 1  # First frame is always valid (origin)
+                else:
+                    # Check if pose is not identity
+                    if not torch.allclose(pose[3:7], torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device)):
+                        valid_poses += 1
+
+        print(f"  Valid poses: {valid_poses}")
+        print(f"  Total points: {self.m}")
+
+        # 2. Process inverse depth and depth statistics
+        if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
+            # Extract center pixel of each patch
+            inv_depths = self.patches[0, :self.m, 2, 1, 1]  # Shape: [m]
+
+            # Count valid 3D points based on inverse depth range
+            valid_mask = (inv_depths >= 0.02) & (inv_depths <= 5.0)
+            valid_3d_points = valid_mask.sum().item()
+            print(f"  Valid 3D points: {valid_3d_points}")
+
+            # Inverse depth statistics
+            inv_depth_min = inv_depths.min().item()
+            inv_depth_max = inv_depths.max().item()
+            inv_depth_mean = inv_depths.mean().item()
+            inv_depth_median = inv_depths.median().item()
+            inv_depth_std = inv_depths.std().item()
+
+            # Calculate percentiles
+            inv_depths_sorted, _ = torch.sort(inv_depths)
+            n = len(inv_depths_sorted)
+            p25 = inv_depths_sorted[int(n * 0.25)].item()
+            p75 = inv_depths_sorted[int(n * 0.75)].item()
+            p95 = inv_depths_sorted[int(n * 0.95)].item()
+
+            # Count outliers
+            valid_range_mask = (inv_depths >= 0.02) & (inv_depths <= 5.0)
+            valid_count = valid_range_mask.sum().item()
+            outlier_low_count = (inv_depths < 0.02).sum().item()
+            outlier_high_count = (inv_depths > 5.0).sum().item()
+
+            print(f"  Inverse depth stats:")
+            print(f"    Range: {inv_depth_min:.6f} - {inv_depth_max:.6f}")
+            print(f"    Mean±Std: {inv_depth_mean:.6f}±{inv_depth_std:.6f}")
+            print(f"    Median: {inv_depth_median:.6f}")
+            print(f"    Percentiles: 25%={p25:.6f}, 75%={p75:.6f}, 95%={p95:.6f}")
+            print(f"    Valid range (0.02-5.0): {valid_count}/{n} ({100*valid_count/n:.1f}%)")
+            if outlier_low_count > 0 or outlier_high_count > 0:
+                print(f"    Outliers: <0.02={outlier_low_count}, >5.0={outlier_high_count}")
+
+            # Depth statistics
+            valid_inv_depths = inv_depths[(inv_depths >= 0.02) & (inv_depths <= 5.0)]
+            if len(valid_inv_depths) > 0:
+                depths = 1.0 / valid_inv_depths
+
+                # Calculate depth statistics
+                depth_min = depths.min().item()
+                depth_max = depths.max().item()
+                depth_mean = depths.mean().item()
+                depth_median = depths.median().item()
+                depth_std = depths.std().item()
+
+                # Calculate depth percentiles
+                depths_sorted, _ = torch.sort(depths)
+                n_depth = len(depths_sorted)
+                depth_p25 = depths_sorted[int(n_depth * 0.25)].item()
+                depth_p75 = depths_sorted[int(n_depth * 0.75)].item()
+                depth_p95 = depths_sorted[int(n_depth * 0.95)].item()
+
+                # Count depth outliers
+                depth_valid_mask = (depths >= 0.2) & (depths <= 50.0)
+                depth_valid_count = depth_valid_mask.sum().item()
+                depth_outlier_low = (depths < 0.2).sum().item()
+                depth_outlier_high = (depths > 50.0).sum().item()
+
+                print(f"  Depth stats:")
+                print(f"    Range: {depth_min:.6f} - {depth_max:.6f}m")
+                print(f"    Mean±Std: {depth_mean:.6f}±{depth_std:.6f}m")
+                print(f"    Median: {depth_median:.6f}m")
+                print(f"    Percentiles: 25%={depth_p25:.6f}m, 75%={depth_p75:.6f}m, 95%={depth_p95:.6f}m")
+                print(f"    Valid range (0.2-50m): {depth_valid_count}/{n_depth} ({100*depth_valid_count/n_depth:.1f}%)")
+                if depth_outlier_low > 0 or depth_outlier_high > 0:
+                    print(f"    Outliers: <0.2m={depth_outlier_low}, >50m={depth_outlier_high}")
 
     def debug_extract(self, tstamp, image, intrinsics):
 
