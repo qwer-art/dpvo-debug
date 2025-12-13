@@ -6,7 +6,7 @@ _C = CN()
 _C.BUFFER_SIZE = 4096
 
 # bias patch selection towards high gradient regions?
-_C.CENTROID_SEL_STRAT = 'RANDOM'
+_C.CENTROID_SEL_STRAT = 'GRADIENT_BIAS'
 
 # VO config (increase for better accuracy)
 _C.PATCHES_PER_FRAME = 80

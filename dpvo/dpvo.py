@@ -2,6 +2,9 @@ import numpy as np
 import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
+import sys
+import os
+from datetime import datetime
 
 from . import altcorr, fastba, lietorch
 from . import projective_ops as pops
@@ -10,6 +13,86 @@ from .net import VONet
 from .patchgraph import PatchGraph
 from .utils import *
 from .debug_utils import *
+
+# Create a logger class to redirect output
+class Logger:
+    # Class variable to hold the global log file
+    _log_file = None
+
+    def __init__(self, log_dir="/home/jerett/Project/DPVO/Debug/Log"):
+        self.log_dir = log_dir
+        os.makedirs(log_dir, exist_ok=True)
+
+        # Use a lock file mechanism to ensure only one log file per run
+        if Logger._log_file is None:
+            lock_file = os.path.join(log_dir, ".dpvo_logger_lock")
+
+            # Try to create lock file (atomic operation)
+            try:
+                # Try to open file in exclusive mode
+                fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                # We got the lock, create log file
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                Logger._log_file = os.path.join(log_dir, f"dpvo_log_{timestamp}.txt")
+                os.close(fd)
+                # Write the log file path to lock file
+                with open(lock_file, 'w') as f:
+                    f.write(Logger._log_file)
+            except FileExistsError:
+                # Lock file already exists, read the log file path
+                with open(lock_file, 'r') as f:
+                    Logger._log_file = f.read().strip()
+            except Exception:
+                # Fallback: create unique log file with PID
+                if Logger._log_file is None:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    pid = os.getpid()
+                    Logger._log_file = os.path.join(log_dir, f"dpvo_log_{timestamp}_pid{pid}.txt")
+
+        self.log_file = Logger._log_file
+
+        # Keep original stdout
+        self.terminal = sys.stdout
+
+    def write(self, message):
+        # Write to both terminal and file
+        self.terminal.write(message)
+        # Add timestamp for important lines (those ending with newline)
+        if message.strip() and (message.endswith('\n') or len(message.strip()) > 10):
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {message}")
+        else:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write(message)
+
+    def flush(self):
+        # Flush both terminal and file
+        self.terminal.flush()
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.flush()
+        except:
+            pass
+
+# Initialize logger for this process
+logger = Logger()
+sys.stdout = logger
+sys.stderr = logger
+
+import atexit
+def cleanup_lock():
+    """Clean up the lock file when program exits"""
+    try:
+        lock_file = os.path.join("/home/jerett/Project/DPVO/Debug/Log", ".dpvo_logger_lock")
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+    except:
+        pass
+
+# Register cleanup function
+atexit.register(cleanup_lock)
+
 mp.set_start_method('spawn', True)
 
 
@@ -334,8 +417,32 @@ class DPVO:
         self.ran_global_ba[self.n] = True
 
     def update(self):
+        # Print current frame timestamp if available
+        if hasattr(self, 'current_timestamp'):
+            print(f"\n=== Update - Frame {self.n}, Timestamp: {self.current_timestamp} ===")
+        else:
+            print(f"\n=== Update - Frame {self.n} ===")
+
         with Timer("other", enabled=self.enable_timing):
             coords = self.reproject()
+
+            # Print coords information
+            print(f"1. coords:")
+            print(f"   - Shape: {coords.shape}")
+            if coords.numel() > 0:
+                # Debug: print the actual structure
+                print(f"   - Debug: self.P = {self.P}")
+                print(f"   - Debug: coords[...,self.P//2,self.P//2,:].shape = {coords[...,self.P//2,self.P//2,:].shape}")
+
+                # Get first 5 center coordinates correctly
+                # coords shape: [1, N, 2, 3, 3] -> we want first 5 entries of the center pixels
+                center_coords = coords[0, :5, self.P//2, self.P//2, :2]  # Take first 5, center pixel, u,v
+
+                # Print first 5 correctly
+                print(f"   - First 5 center coordinates (u, v):")
+                for i in range(center_coords.shape[0]):
+                    u, v = center_coords[i, 0].item(), center_coords[i, 1].item()
+                    print(f"     [{i}]: u={u:.2f}, v={v:.2f}")
 
             with autocast(enabled=True):
                 corr = self.corr(coords)
@@ -343,9 +450,47 @@ class DPVO:
                 self.pg.net, (delta, weight, _) = \
                     self.network.update(self.pg.net, ctx, corr, None, self.pg.ii, self.pg.jj, self.pg.kk)
 
+            # Print delta information
+            print(f"2. delta:")
+            print(f"   - Shape: {delta.shape}")
+            if delta.numel() > 0:
+                # Get first 5 delta values
+                delta_flat = delta.flatten(0, 1)[:5]
+                print(f"   - First 5 delta values (du, dv):")
+                for i, d in enumerate(delta_flat):
+                    du, dv = d[0].item(), d[1].item()
+                    print(f"     [{i}]: du={du:.3f}, dv={dv:.3f}")
+
             lmbda = torch.as_tensor([1e-4], device="cuda")
             weight = weight.float()
             target = coords[...,self.P//2,self.P//2] + delta.float()
+
+            # Print target information
+            print(f"3. target:")
+            print(f"   - Shape: {target.shape}")
+            if target.numel() > 0:
+                # Get first 5 target coordinates
+                target_flat = target.flatten(0, 1)[:5]
+                print(f"   - First 5 target coordinates (u, v):")
+                for i, t in enumerate(target_flat):
+                    u, v = t[0].item(), t[1].item()
+                    print(f"     [{i}]: u={u:.2f}, v={v:.2f}")
+
+            # Calculate and print residual
+            # coords has 3 channels, target has 2 channels, so use only first 2 channels of coords
+            coords_center = coords[...,self.P//2,self.P//2,:2]  # Take only u,v channels
+            residual = target - coords_center
+            print(f"4. residual r:")
+            print(f"   - Shape: {residual.shape}")
+            if residual.numel() > 0:
+                # Get first 5 residual values
+                residual_flat = residual.flatten(0, 1)[:5]
+                print(f"   - First 5 residual values (ru, rv):")
+                for i, r in enumerate(residual_flat):
+                    ru, rv = r[0].item(), r[1].item()
+                    rmag = torch.sqrt(r[0]**2 + r[1]**2).item()
+                    print(f"     [{i}]: ru={ru:.3f}, rv={rv:.3f}, |r|={rmag:.3f}")
+                print(f"   - Mean residual magnitude: {torch.norm(residual, dim=-1).mean().item():.3f}")
 
         self.pg.target = target
         self.pg.weight = weight
@@ -419,6 +564,9 @@ class DPVO:
 
     def __call__(self, tstamp, image, intrinsics):
         """ track new frame """
+
+        # Store current timestamp for use in update()
+        self.current_timestamp = tstamp
 
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc(image, self.n)
