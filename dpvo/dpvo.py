@@ -410,32 +410,8 @@ class DPVO:
         # Increment update counter
         self.update_counter += 1
 
-        # Print current frame timestamp if available
-        if hasattr(self, 'current_timestamp'):
-            print(f"\n=== Update #{self.update_counter} - Frame {self.n}, Timestamp: {self.current_timestamp} ===")
-        else:
-            print(f"\n=== Update #{self.update_counter} - Frame {self.n} ===")
-
         with Timer("other", enabled=self.enable_timing):
             coords = self.reproject()
-
-            # Print coords information
-            print(f"1. coords:")
-            print(f"   - Shape: {coords.shape}")
-            if coords.numel() > 0:
-                # Debug: print the actual structure
-                print(f"   - Debug: self.P = {self.P}")
-                print(f"   - Debug: coords[...,self.P//2,self.P//2,:].shape = {coords[...,self.P//2,self.P//2,:].shape}")
-
-                # Get first 5 center coordinates correctly
-                # coords shape: [1, N, 2, 3, 3] -> we want first 5 entries of the center pixels
-                center_coords = coords[0, :5, self.P//2, self.P//2, :2]  # Take first 5, center pixel, u,v
-
-                # Print first 5 correctly
-                print(f"   - First 5 center coordinates (u, v):")
-                for i in range(center_coords.shape[0]):
-                    u, v = center_coords[i, 0].item(), center_coords[i, 1].item()
-                    print(f"     [{i}]: u={u:.2f}, v={v:.2f}")
 
             with autocast(enabled=True):
                 corr = self.corr(coords)
@@ -443,47 +419,9 @@ class DPVO:
                 self.pg.net, (delta, weight, _) = \
                     self.network.update(self.pg.net, ctx, corr, None, self.pg.ii, self.pg.jj, self.pg.kk)
 
-            # Print delta information
-            print(f"2. delta:")
-            print(f"   - Shape: {delta.shape}")
-            if delta.numel() > 0:
-                # Get first 5 delta values
-                delta_flat = delta.flatten(0, 1)[:5]
-                print(f"   - First 5 delta values (du, dv):")
-                for i, d in enumerate(delta_flat):
-                    du, dv = d[0].item(), d[1].item()
-                    print(f"     [{i}]: du={du:.3f}, dv={dv:.3f}")
-
             lmbda = torch.as_tensor([1e-4], device="cuda")
             weight = weight.float()
             target = coords[...,self.P//2,self.P//2] + delta.float()
-
-            # Print target information
-            print(f"3. target:")
-            print(f"   - Shape: {target.shape}")
-            if target.numel() > 0:
-                # Get first 5 target coordinates
-                target_flat = target.flatten(0, 1)[:5]
-                print(f"   - First 5 target coordinates (u, v):")
-                for i, t in enumerate(target_flat):
-                    u, v = t[0].item(), t[1].item()
-                    print(f"     [{i}]: u={u:.2f}, v={v:.2f}")
-
-            # Calculate and print residual
-            # coords has 3 channels, target has 2 channels, so use only first 2 channels of coords
-            coords_center = coords[...,self.P//2,self.P//2,:2]  # Take only u,v channels
-            residual = target - coords_center
-            print(f"4. residual r:")
-            print(f"   - Shape: {residual.shape}")
-            if residual.numel() > 0:
-                # Get first 5 residual values
-                residual_flat = residual.flatten(0, 1)[:5]
-                print(f"   - First 5 residual values (ru, rv):")
-                for i, r in enumerate(residual_flat):
-                    ru, rv = r[0].item(), r[1].item()
-                    rmag = torch.sqrt(r[0]**2 + r[1]**2).item()
-                    print(f"     [{i}]: ru={ru:.3f}, rv={rv:.3f}, |r|={rmag:.3f}")
-                print(f"   - Mean residual magnitude: {torch.norm(residual, dim=-1).mean().item():.3f}")
 
         self.pg.target = target
         self.pg.weight = weight
@@ -558,6 +496,11 @@ class DPVO:
     def __call__(self, tstamp, image, intrinsics):
         """ track new frame """
 
+        # Print frame separator with timestamp
+        print("\n" + "="*80)
+        print(f"[FRAME] Processing Frame #{tstamp}")
+        print("="*80)
+
         # Store current timestamp for use in update()
         self.current_timestamp = tstamp
 
@@ -589,7 +532,7 @@ class DPVO:
                     centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
                     return_color=True)
             
-        print(f"ts: {tstamp},image: {image.shape},fmap: {fmap.shape},gmap: {gmap.shape},imap: {imap.shape},patches: {patches.shape},clr: {clr.shape}")
+        # print(f"ts: {tstamp},image: {image.shape},fmap: {fmap.shape},gmap: {gmap.shape},imap: {imap.shape},patches: {patches.shape},clr: {clr.shape}")
 
         # pred_feature = (fmap, gmap, imap, patches, _, clr)
         # save_features(tstamp,pred_feature)
@@ -680,7 +623,62 @@ class DPVO:
         # endregion
 
         # save_patches(tstamp,self.pg.patches_)
-        print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
+        # print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
+
+        # Print frame statistics
+        print(f"\n[FRAME STATS] Timestamp: {tstamp}")
+
+        # 1. Count valid poses
+        valid_poses = 0
+        if hasattr(self, 'poses') and self.poses is not None:
+            for i in range(min(self.n, self.poses.shape[1])):
+                pose = self.poses[0, i] if self.poses.dim() == 3 else self.poses[i]
+                if i == 0:
+                    valid_poses += 1  # First frame is always valid (origin)
+                else:
+                    # Check if pose is not identity
+                    if not torch.allclose(pose[3:7], torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device)):
+                        valid_poses += 1
+
+        print(f"  Valid poses: {valid_poses}")
+
+        # 2. Print point cloud count
+        total_points = self.m  # Total points
+        print(f"  Total points: {total_points}")
+
+        # 3. Count valid 3D points
+        valid_3d_points = 0
+        if hasattr(self, 'patches') and self.m > 0:
+            try:
+                points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m],
+                                        self.intrinsics, self.ix[:self.m])
+                if points.dim() >= 4 and points.shape[-2:] == torch.Size([3, 4]):
+                    points_center = points[..., 1, 1, :]  # Extract center pixel [N, 4]
+                    xyz = points_center[:, :3]
+                    w = torch.clamp(points_center[:, 3:4], min=1e-8)
+                    points_3d = xyz / w
+                    depth_values = points_3d[:, 2]
+                    valid_mask = torch.isfinite(depth_values) & (depth_values > 0.2) & (depth_values < 50.0)
+                    valid_3d_points = valid_mask.sum().item()
+            except:
+                pass
+
+        print(f"  Valid 3D points: {valid_3d_points}")
+
+        # 4. Calculate and print inverse depth range (clamped to 0.02-5)
+        if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
+            inv_depths = self.patches[:, :self.m, 2]
+            inv_depth_min = torch.clamp(inv_depths.min(), 0.02, 5.0).item()
+            inv_depth_max = torch.clamp(inv_depths.max(), 0.02, 5.0).item()
+            print(f"  Inverse depth - min: {inv_depth_min:.6f}, max: {inv_depth_max:.6f}")
+
+            # 5. Calculate and print depth range (clamped to 0.2-50)
+            valid_inv_depths = inv_depths[inv_depths > 1e-8]
+            if len(valid_inv_depths) > 0:
+                depths = 1.0 / valid_inv_depths
+                depth_min = torch.clamp(depths.min(), 0.2, 50.0).item()
+                depth_max = torch.clamp(depths.max(), 0.2, 50.0).item()
+                print(f"  Depth - min: {depth_min:.6f}m, max: {depth_max:.6f}m")
 
         # Visualize feature points from network output
 
@@ -819,15 +817,7 @@ class DPVO:
                     patches_per_image=self.cfg.PATCHES_PER_FRAME, 
                     centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
                     return_color=True)
-        ### 2.update state attributes ###  
-        print(f"=== frame,tstamp: {tstamp},n: {self.n},counter: {self.counter} ===")
-        print(f"    Initialized: {self.is_initialized}")
-        print(f"image: {image.shape}")
-        print(f"fmap: {fmap.shape}")
-        print(f"gmap: {gmap.shape}")
-        print(f"imap: {imap.shape}")
-        print(f"patches: {patches.shape}")
-        print(f"clr: {clr.shape}")
+        ### 2.update state attributes ###
         self.tlist.append(tstamp)
         self.pg.tstamps_[self.n] = self.counter
         self.pg.intrinsics_[self.n] = intrinsics / self.RES
@@ -844,7 +834,6 @@ class DPVO:
             if self.cfg.MOTION_MODEL == 'DAMPED_LINEAR':
                 P1 = SE3(self.pg.poses_[self.n-1])
                 P2 = SE3(self.pg.poses_[self.n-2])
-                print(f"P1: {P1},P2: {P2}")
 
                 # To deal with varying camera hz
                 *_, a,b,c = [1]*3 + self.tlist
@@ -856,13 +845,6 @@ class DPVO:
 
         ### 4.depth initialization ###
         patches[:,:,2] = torch.rand_like(patches[:,:,2,0,0,None,None])
-
-        # Debug: Print depth initialization info
-        print(f"[DEPTH] Frame {self.n} depth initialization:")
-        print(f"  - Random depth range: [{patches[:,:,2].min().item():.4f}, {patches[:,:,2].max().item():.4f}]")
-        print(f"  - Mean depth: {patches[:,:,2].mean().item():.4f}")
-        print(f"  - Number of patches: {patches.shape[1]}")
-
         self.pg.patches_[self.n] = patches
 
         # Visualize extracted coordinates on the original image
@@ -1046,3 +1028,132 @@ class DPVO:
         print(f"  - Point cloud (PLY): {ply_file}")
         print(f"  - State (JSON): {json_file}")
         print(f"  - Frames: {self.n}, Points: {len(points_3d)}")
+
+    def get_frame_statistics(self):
+        """
+        Get comprehensive frame statistics and return valid poses and points
+
+        Returns:
+            dict: Dictionary containing statistics and valid data, or None if not available
+            {
+                'n': int,                    # Total frames processed
+                'valid_poses': int,           # Number of valid poses
+                'valid_poses_data': list,      # List of valid pose tensors
+                'total_points': int,          # Total number of 3D points
+                'valid_3d_points': int,        # Number of points with valid depth
+                'valid_3d_points_data': numpy.ndarray,  # Valid 3D points [N, 3]
+                'valid_3d_points_colors': numpy.ndarray,  # RGB colors for valid points [N, 3]
+                'status': str,                # 'INITIALIZING' or 'TRACKING'
+                'is_initialized': bool        # Whether SLAM is initialized
+            }
+        """
+        import numpy as np
+
+        if not hasattr(self, 'pg'):
+            return None
+
+        # Initialize return data
+        stats = {
+            'n': self.n,
+            'valid_poses': 0,
+            'valid_poses_data': [],
+            'total_points': 0,
+            'valid_3d_points': 0,
+            'valid_3d_points_data': None,
+            'valid_3d_points_colors': None,
+            'status': "INITIALIZING" if not self.is_initialized else "TRACKING",
+            'is_initialized': self.is_initialized
+        }
+
+        # Calculate total number of 3D points
+        stats['total_points'] = self.m  # self.m = n * M (total patches processed)
+
+        # Extract and count valid 3D points
+        try:
+            points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m],
+                                    self.intrinsics, self.ix[:self.m])
+
+            # points shape should be [N, 3, 3, 4] where N is number of points
+            # Extract center patch and convert to 3D coordinates (same as line 443)
+            if points.dim() >= 4 and points.shape[-2:] == torch.Size([3, 4]):
+                # Extract center pixel (1, 1) from each 3x3 patch
+                points_center = points[..., 1, 1, :]  # [N, 4] in homogeneous coordinates
+
+                # Convert from homogeneous to 3D coordinates: xyz / w
+                xyz = points_center[:, :3]  # [N, 3]
+                w = points_center[:, 3:4]  # [N, 1]
+
+                # Calculate actual depth (z coordinate after division)
+                w_safe = torch.clamp(w, min=1e-8)
+                points_3d = xyz / w_safe  # [N, 3]
+                depth_values = points_3d[:, 2]  # z values (depth)
+
+                # Filter valid depth values (0.2 to 50 meters)
+                valid_mask = torch.isfinite(depth_values) & (depth_values > 0.2) & (depth_values < 50.0)
+                stats['valid_3d_points'] = valid_mask.sum().item()
+
+                if stats['valid_3d_points'] > 0:
+                    stats['valid_3d_points_data'] = points_3d[valid_mask].cpu().numpy()
+            else:
+                # Fallback for unexpected shape
+                stats['valid_3d_points'] = 0
+                stats['valid_3d_points_data'] = None
+                stats['valid_3d_points_colors'] = None
+
+            # Get colors for valid points
+            if stats['valid_3d_points'] > 0 and hasattr(self.pg, 'colors_') and self.pg.colors_ is not None:
+                try:
+                    valid_colors = []
+
+                    # Get indices of valid points
+                    valid_point_indices = torch.nonzero(valid_mask).squeeze().cpu().numpy()
+
+                    # Map points to their source frames
+                    for frame_idx in range(min(self.n, len(self.pg.colors_))):
+                        frame_start = frame_idx * self.M
+                        frame_end = min(frame_start + self.m, len(valid_point_indices))
+
+                        # Get valid points that belong to this frame
+                        frame_mask = (valid_point_indices >= frame_start) & (valid_point_indices < frame_end)
+                        frame_valid_indices = valid_point_indices[frame_mask] - frame_start
+
+                        if len(frame_valid_indices) > 0:
+                            colors = self.pg.colors_[frame_idx].cpu().numpy()
+                            # Ensure indices don't exceed colors array size
+                            valid_frame_indices = frame_valid_indices[frame_valid_indices < colors.shape[0]]
+                            valid_colors.extend(colors[valid_frame_indices])
+
+                    # Convert to numpy array
+                    if valid_colors:
+                        stats['valid_3d_points_colors'] = np.array(valid_colors[:stats['valid_3d_points']])
+                    else:
+                        stats['valid_3d_points_colors'] = None
+
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract colors: {e}")
+                    stats['valid_3d_points_colors'] = None
+
+        except Exception as e:
+            print(f"[WARNING] Failed to extract valid 3D points: {e}")
+            stats['valid_3d_points'] = 0
+            stats['valid_3d_points_data'] = None
+            stats['valid_3d_points_colors'] = None
+
+        # Count valid poses
+        if hasattr(self, 'poses') and self.poses is not None:
+            stats['valid_poses_data'] = []
+
+            for i in range(min(self.n, self.poses.shape[1])):
+                pose = self.poses[0, i] if self.poses.dim() == 3 else self.poses[i]
+
+                if i == 0:
+                    # First frame is always considered valid (origin)
+                    stats['valid_poses'] += 1
+                    stats['valid_poses_data'].append(pose.clone())
+                else:
+                    # For other frames, check if they've been estimated (not identity)
+                    if not torch.allclose(pose[3:7], torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device)):
+                        stats['valid_poses'] += 1
+                        stats['valid_poses_data'].append(pose.clone())
+
+        return stats

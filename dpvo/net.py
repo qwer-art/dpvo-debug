@@ -128,11 +128,7 @@ class Patchifier(nn.Module):
             x = torch.gather(x, 1, ix[:, -patches_per_image:])
             y = torch.gather(y, 1, ix[:, -patches_per_image:])
 
-            # Debug: print gradient info
-            print(f"[DEBUG] Gradient-based selection:")
-            print(f"  - Generated {3*patches_per_image} random candidates")
-            print(f"  - Selected top {patches_per_image} with highest gradients")
-            print(f"  - First 5 selected coords: {x[0, :5].tolist(), y[0, :5].tolist()}")
+            # Debug info removed for cleaner output
 
         elif centroid_sel_strat == 'RANDOM':
             x = torch.randint(1, w-1, size=[n, patches_per_image], device="cuda")
@@ -144,7 +140,7 @@ class Patchifier(nn.Module):
         coords = torch.stack([x, y], dim=-1).float()
         imap = altcorr.patchify(imap[0], coords, 0).view(b, -1, DIM, 1, 1)
         gmap = altcorr.patchify(fmap[0], coords, P//2).view(b, -1, 128, P, P)
-        print(f"coords: {coords.shape},imap: {imap.shape},gmap: {gmap.shape}")
+        # print(f"coords: {coords.shape},imap: {imap.shape},gmap: {gmap.shape}")
 
         if return_color:
             clr = altcorr.patchify(images[0], 4*(coords + 0.5), 0).view(b, -1, 3)
@@ -194,7 +190,7 @@ class Patchifier(nn.Module):
         coords = torch.stack([x, y], dim=-1).float()
         imap = altcorr.patchify(imap[0], coords, 0).view(b, -1, DIM, 1, 1)
         gmap = altcorr.patchify(fmap[0], coords, P//2).view(b, -1, 128, P, P)
-        print(f"coords: {coords.shape},imap: {imap.shape},gmap: {gmap.shape}")
+        # print(f"coords: {coords.shape},imap: {imap.shape},gmap: {gmap.shape}")
 
         if return_color:
             clr = altcorr.patchify(images[0], 4*(coords + 0.5), 0).view(b, -1, 3)

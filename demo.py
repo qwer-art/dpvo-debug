@@ -53,9 +53,9 @@ def run(cfg, network, imagedir, calib, stride=1, skip=0, viz=False, timeit=False
             slam = DPVO(cfg, network, ht=H, wd=W, viz=viz)
 
         with Timer("SLAM", enabled=timeit):
-            # slam(t, image, intrinsics)
+            slam(t, image, intrinsics)
             # slam.debug_extract(t, image, intrinsics)
-            slam.initialized(t, image, intrinsics)
+            # slam.initialized(t, image, intrinsics)
 
     print("[End] while")
     reader.join()
