@@ -856,6 +856,13 @@ class DPVO:
 
         ### 4.depth initialization ###
         patches[:,:,2] = torch.rand_like(patches[:,:,2,0,0,None,None])
+
+        # Debug: Print depth initialization info
+        print(f"[DEPTH] Frame {self.n} depth initialization:")
+        print(f"  - Random depth range: [{patches[:,:,2].min().item():.4f}, {patches[:,:,2].max().item():.4f}]")
+        print(f"  - Mean depth: {patches[:,:,2].mean().item():.4f}")
+        print(f"  - Number of patches: {patches.shape[1]}")
+
         self.pg.patches_[self.n] = patches
 
         # Visualize extracted coordinates on the original image
@@ -888,6 +895,8 @@ class DPVO:
             for itr in range(12):
                 print(f"\n[INIT] Iteration {itr+1}/12")
                 self.update()
+                # Save pose and point cloud after each update
+                self.save_init_state(itr)
             print(f"\n[INIT] Initialization optimization completed")
 
     def visualize_initialized_coordinates(self, tstamp, image, patches):
@@ -953,3 +962,87 @@ class DPVO:
 
         print(f"[VIS_INIT] Saved initialization visualization to: {output_path}")
         print(f"[VIS_INIT] Visualized {num_points} coordinates on original image")
+
+    def save_init_state(self, iteration):
+        """Save poses and point cloud during initialization iterations"""
+        import os
+        import numpy as np
+
+        print(f"[INIT_SAVE] Saving state for iteration {iteration}")
+
+        # Create output directory
+        output_dir = "/home/jerett/Project/DPVO/Debug/Init"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save poses
+        # Convert poses from SE3 to transformation matrix
+        poses_se3 = SE3(self.poses[:, :self.n])  # Get poses for initialized frames
+        poses_np = poses_se3.matrix().cpu().numpy()  # Convert to numpy [1, N, 4, 4]
+
+        # Save poses as TUM format
+        tum_file = os.path.join(output_dir, f"poses_iter_{iteration:02d}.txt")
+        with open(tum_file, 'w') as f:
+            for i in range(poses_np.shape[1]):  # poses_np shape: [1, N, 4, 4]
+                timestamp = self.tlist[i] if i < len(self.tlist) else float(i)
+                pose_matrix = poses_np[0, i]  # [4, 4]
+
+                # Extract translation
+                tx, ty, tz = pose_matrix[:3, 3]
+
+                # Extract quaternion (x, y, z, w)
+                # Convert rotation matrix to quaternion using simple method
+                import scipy.spatial.transform as st
+                rotation = st.Rotation.from_matrix(pose_matrix[:3, :3])
+                quat = rotation.as_quat()  # (x, y, z, w)
+                qx, qy, qz, qw = quat
+
+                f.write(f"{timestamp:.6f} {tx:.6f} {ty:.6f} {tz:.6f} {qx:.6f} {qy:.6f} {qz:.6f} {qw:.6f}\n")
+
+        # Save point cloud
+        # Extract 3D points from patches
+        points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
+        points_3d = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3).cpu().numpy()
+
+        # Get colors for points
+        colors = self.pg.colors_[:self.m].cpu().numpy().reshape(-1, 3)
+
+        # Save point cloud as PLY format
+        ply_file = os.path.join(output_dir, f"points_iter_{iteration:02d}.ply")
+        with open(ply_file, 'w') as f:
+            f.write("ply\n")
+            f.write("format ascii 1.0\n")
+            f.write(f"element vertex {len(points_3d)}\n")
+            f.write("property float x\n")
+            f.write("property float y\n")
+            f.write("property float z\n")
+            f.write("property uchar red\n")
+            f.write("property uchar green\n")
+            f.write("property uchar blue\n")
+            f.write("end_header\n")
+
+            for i in range(len(points_3d)):
+                x, y, z = points_3d[i]
+                r, g, b = colors[i] if i < len(colors) else (255, 0, 0)
+                f.write(f"{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n")
+
+        # Save as JSON for easier processing
+        json_file = os.path.join(output_dir, f"state_iter_{iteration:02d}.json")
+        import json
+        state_data = {
+            'iteration': iteration,
+            'poses': poses_np[0].tolist(),  # [N, 4, 4]
+            'points': points_3d.tolist(),
+            'colors': colors.tolist(),
+            'timestamps': self.tlist[:self.n],
+            'frame_count': self.n,
+            'patch_count': self.m
+        }
+
+        with open(json_file, 'w') as f:
+            json.dump(state_data, f, indent=2)
+
+        print(f"[INIT_SAVE] Saved iteration {iteration}:")
+        print(f"  - Poses (TUM): {tum_file}")
+        print(f"  - Point cloud (PLY): {ply_file}")
+        print(f"  - State (JSON): {json_file}")
+        print(f"  - Frames: {self.n}, Points: {len(points_3d)}")
