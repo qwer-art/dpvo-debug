@@ -646,36 +646,32 @@ class DPVO:
         total_points = self.m  # Total points
         print(f"  Total points: {total_points}")
 
-        # 3. Count valid 3D points
+        # 3. Count valid 3D points based on inverse depth range (0.02-5)
         valid_3d_points = 0
-        if hasattr(self, 'patches') and self.m > 0:
-            try:
-                points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m],
-                                        self.intrinsics, self.ix[:self.m])
-                if points.dim() >= 4 and points.shape[-2:] == torch.Size([3, 4]):
-                    points_center = points[..., 1, 1, :]  # Extract center pixel [N, 4]
-                    xyz = points_center[:, :3]
-                    w = torch.clamp(points_center[:, 3:4], min=1e-8)
-                    points_3d = xyz / w
-                    depth_values = points_3d[:, 2]
-                    valid_mask = torch.isfinite(depth_values) & (depth_values > 0.2) & (depth_values < 50.0)
-                    valid_3d_points = valid_mask.sum().item()
-            except:
-                pass
+        if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
+            # self.patches shape is [1, m, 3, P, P], we need the center pixel of each patch
+            # Extract center pixel (1,1) from each patch's depth channel
+            inv_depths = self.patches[0, :self.m, 2, 1, 1]  # Shape: [m]
+            # Count points with inverse depth in valid range
+            valid_mask = (inv_depths >= 0.02) & (inv_depths <= 5.0)
+            valid_3d_points = valid_mask.sum().item()
 
         print(f"  Valid 3D points: {valid_3d_points}")
 
-        # 4. Calculate and print inverse depth range (clamped to 0.02-5)
+        # 4. Calculate and print inverse depth range
         if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
-            inv_depths = self.patches[:, :self.m, 2]
+            # Extract center pixel of each patch
+            inv_depths = self.patches[0, :self.m, 2, 1, 1]  # Shape: [m]
+            # Clamp to valid range for display
             inv_depth_min = torch.clamp(inv_depths.min(), 0.02, 5.0).item()
             inv_depth_max = torch.clamp(inv_depths.max(), 0.02, 5.0).item()
             print(f"  Inverse depth - min: {inv_depth_min:.6f}, max: {inv_depth_max:.6f}")
 
-            # 5. Calculate and print depth range (clamped to 0.2-50)
-            valid_inv_depths = inv_depths[inv_depths > 1e-8]
+            # 5. Calculate and print corresponding depth range
+            valid_inv_depths = inv_depths[(inv_depths >= 0.02) & (inv_depths <= 5.0)]
             if len(valid_inv_depths) > 0:
                 depths = 1.0 / valid_inv_depths
+                # Clamp to 0.2-50m for display
                 depth_min = torch.clamp(depths.min(), 0.2, 50.0).item()
                 depth_max = torch.clamp(depths.max(), 0.2, 50.0).item()
                 print(f"  Depth - min: {depth_min:.6f}m, max: {depth_max:.6f}m")
