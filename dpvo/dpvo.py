@@ -23,31 +23,22 @@ class Logger:
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
 
-        # Use a lock file mechanism to ensure only one log file per run
+        # Use a fixed log file name based on date (cleared each run)
         if Logger._log_file is None:
-            lock_file = os.path.join(log_dir, ".dpvo_logger_lock")
+            date_str = datetime.now().strftime("%Y%m%d")
+            Logger._log_file = os.path.join(log_dir, f"dpvo_log_{date_str}.txt")
 
-            # Try to create lock file (atomic operation)
+            # Clear the log file at the start of each run
             try:
-                # Try to open file in exclusive mode
-                fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                # We got the lock, create log file
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                Logger._log_file = os.path.join(log_dir, f"dpvo_log_{timestamp}.txt")
-                os.close(fd)
-                # Write the log file path to lock file
-                with open(lock_file, 'w') as f:
-                    f.write(Logger._log_file)
-            except FileExistsError:
-                # Lock file already exists, read the log file path
-                with open(lock_file, 'r') as f:
-                    Logger._log_file = f.read().strip()
-            except Exception:
-                # Fallback: create unique log file with PID
-                if Logger._log_file is None:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    pid = os.getpid()
-                    Logger._log_file = os.path.join(log_dir, f"dpvo_log_{timestamp}_pid{pid}.txt")
+                with open(Logger._log_file, 'w', encoding='utf-8') as f:
+                    # Write a header with run timestamp
+                    run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    f.write(f"\n{'='*60}\n")
+                    f.write(f"DPVO Log - Run started at: {run_timestamp}\n")
+                    f.write(f"{'='*60}\n\n")
+            except Exception as e:
+                print(f"Warning: Could not initialize log file: {e}")
+                Logger._log_file = None
 
         self.log_file = Logger._log_file
 
@@ -57,41 +48,38 @@ class Logger:
     def write(self, message):
         # Write to both terminal and file
         self.terminal.write(message)
-        # Add timestamp for important lines (those ending with newline)
-        if message.strip() and (message.endswith('\n') or len(message.strip()) > 10):
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            with open(self.log_file, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] {message}")
-        else:
-            with open(self.log_file, 'a', encoding='utf-8') as f:
-                f.write(message)
+
+        # Write to file if it exists
+        if self.log_file:
+            # Add timestamp for important lines (those ending with newline)
+            if message.strip() and (message.endswith('\n') or len(message.strip()) > 10):
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                try:
+                    with open(self.log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"[{timestamp}] {message}")
+                except:
+                    pass  # Silently ignore file write errors
+            else:
+                try:
+                    with open(self.log_file, 'a', encoding='utf-8') as f:
+                        f.write(message)
+                except:
+                    pass  # Silently ignore file write errors
 
     def flush(self):
         # Flush both terminal and file
         self.terminal.flush()
-        try:
-            with open(self.log_file, 'a', encoding='utf-8') as f:
-                f.flush()
-        except:
-            pass
+        if self.log_file:
+            try:
+                with open(self.log_file, 'a', encoding='utf-8') as f:
+                    f.flush()
+            except:
+                pass
 
 # Initialize logger for this process
 logger = Logger()
 sys.stdout = logger
 sys.stderr = logger
-
-import atexit
-def cleanup_lock():
-    """Clean up the lock file when program exits"""
-    try:
-        lock_file = os.path.join("/home/jerett/Project/DPVO/Debug/Log", ".dpvo_logger_lock")
-        if os.path.exists(lock_file):
-            os.remove(lock_file)
-    except:
-        pass
-
-# Register cleanup function
-atexit.register(cleanup_lock)
 
 mp.set_start_method('spawn', True)
 
@@ -424,10 +412,8 @@ class DPVO:
         # Print current frame timestamp if available
         if hasattr(self, 'current_timestamp'):
             print(f"\n=== Update #{self.update_counter} - Frame {self.n}, Timestamp: {self.current_timestamp} ===")
-            print(f"    Initialized: {self.is_initialized}")
         else:
             print(f"\n=== Update #{self.update_counter} - Frame {self.n} ===")
-            print(f"    Initialized: {self.is_initialized}")
 
         with Timer("other", enabled=self.enable_timing):
             coords = self.reproject()
@@ -823,8 +809,9 @@ class DPVO:
                     patches_per_image=self.cfg.PATCHES_PER_FRAME, 
                     centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
                     return_color=True)
-        ### 2.update state attributes ###
+        ### 2.update state attributes ###  
         print(f"=== frame,tstamp: {tstamp},n: {self.n},counter: {self.counter} ===")
+        print(f"    Initialized: {self.is_initialized}")
         print(f"image: {image.shape}")
         print(f"fmap: {fmap.shape}")
         print(f"gmap: {gmap.shape}")
