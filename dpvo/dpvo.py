@@ -797,6 +797,7 @@ class DPVO:
         image_bgr_left = original_image.cpu().permute(1, 2, 0).numpy()
         image_bgr_right = image_bgr_left.copy()
 
+        # region left
         ## 1.可视化左侧图像
         # 1.1 显示相机时间戳
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -936,8 +937,24 @@ class DPVO:
                                 # 用红色加粗文字标注深度值
                                 cv2.putText(image_bgr_left, depth_text, (x_scaled + 10, y_scaled),
                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        # endregion
 
+        # region right
         ## 2.可视化右侧图像
+        # 2.1 显示前7帧关键帧信息
+        prev_frames = min(7, self.n)  # 最多显示前7帧
+
+        # 在右侧图像顶部显示信息
+        info_text = f"Previous: {prev_frames} / 7"
+        text_size_info = cv2.getTextSize(info_text, font, font_scale, font_thickness)[0]
+        cv2.rectangle(image_bgr_right, (10, 10), (10 + text_size_info[0] + 10, 10 + text_size_info[1] + 10), bg_color, -1)
+        cv2.putText(image_bgr_right, info_text, (15, 30), font, font_scale, (255, 255, 255), font_thickness)
+
+        points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
+        points_3d = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3).cpu().numpy()
+        print(f"points_3d: {points_3d.shape} ")
+
+        # endregion
 
         frame_bgr = np.hstack([image_bgr_left,image_bgr_right])
         # Save combined visualization
