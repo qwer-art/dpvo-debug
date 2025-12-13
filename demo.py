@@ -57,6 +57,7 @@ def run(cfg, network, imagedir, calib, stride=1, skip=0, viz=False, timeit=False
             # slam.debug_extract(t, image, intrinsics)
             slam.initialized(t, image, intrinsics)
 
+    print("[End] while")
     reader.join()
 
     points = slam.pg.points_.cpu().numpy()[: slam.m]

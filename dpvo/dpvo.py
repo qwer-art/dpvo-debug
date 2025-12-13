@@ -121,6 +121,7 @@ class DPVO:
         ### state attributes ###
         self.tlist = []
         self.counter = 0
+        self.update_counter = 0  # Count update calls
 
         # keep track of global-BA calls
         self.ran_global_ba = np.zeros(100000, dtype=bool)
@@ -417,11 +418,16 @@ class DPVO:
         self.ran_global_ba[self.n] = True
 
     def update(self):
+        # Increment update counter
+        self.update_counter += 1
+
         # Print current frame timestamp if available
         if hasattr(self, 'current_timestamp'):
-            print(f"\n=== Update - Frame {self.n}, Timestamp: {self.current_timestamp} ===")
+            print(f"\n=== Update #{self.update_counter} - Frame {self.n}, Timestamp: {self.current_timestamp} ===")
+            print(f"    Initialized: {self.is_initialized}")
         else:
-            print(f"\n=== Update - Frame {self.n} ===")
+            print(f"\n=== Update #{self.update_counter} - Frame {self.n} ===")
+            print(f"    Initialized: {self.is_initialized}")
 
         with Timer("other", enabled=self.enable_timing):
             coords = self.reproject()
@@ -876,8 +882,12 @@ class DPVO:
         ### 6.Init ###
         if self.n == 8 and not self.is_initialized:
             self.is_initialized = True
+            print(f"\n[INIT] Starting initialization optimization - Frame {self.n}")
+            print(f"[INIT] Will run 12 update iterations for initial bundle adjustment")
 
             for itr in range(12):
-                print(f"{itr}/12")
+                print(f"\n[INIT] Iteration {itr+1}/12")
                 self.update()
+
+            print(f"\n[INIT] Initialization optimization completed")
 
