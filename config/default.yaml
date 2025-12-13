@@ -16,4 +16,4 @@ MOTION_DAMPING: 0.5
 # maybe use mixed precision for inference
 MIXED_PRECISION: True
 
-CENTROID_SEL_STRAT: 'RANDOM'
+CENTROID_SEL_STRAT: 'GRADIENT_BIAS'

@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import sys
 import os
 from datetime import datetime
+import cv2  # For visualization
 
 from . import altcorr, fastba, lietorch
 from . import projective_ops as pops
@@ -570,6 +571,11 @@ class DPVO:
             self.viewer.update_image(image.contiguous())
         # print(f"{tstamp},image: {self.image_.shape},poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")
 
+        # Store original image for visualization if this is frame 7 (last initialization frame)
+        if self.n == 7:
+            # Make a copy before normalization
+            self.init_frame_image = image.cpu().numpy()  # Store original image as HWC uint8
+
         ## image/intrinsics
         # save_image(tstamp,image)
         # save_intrinsics(tstamp,intrinsics)
@@ -801,6 +807,10 @@ class DPVO:
     def initialized(self, tstamp, image, intrinsics):
         if self.is_initialized:
             return
+
+        # Store original image for visualization
+        original_image = image.clone()
+
         ### 1.extract feature ###
         image = 2 * (image[None,None] / 255.0) - 0.5
         with autocast(enabled=self.cfg.MIXED_PRECISION):
@@ -848,6 +858,9 @@ class DPVO:
         patches[:,:,2] = torch.rand_like(patches[:,:,2,0,0,None,None])
         self.pg.patches_[self.n] = patches
 
+        # Visualize extracted coordinates on the original image
+        self.visualize_initialized_coordinates(tstamp, original_image, patches)
+
         ### update network attributes ###
         self.imap_[self.n % self.pmem] = imap.squeeze()
         self.gmap_[self.n % self.pmem] = gmap.squeeze()
@@ -875,6 +888,68 @@ class DPVO:
             for itr in range(12):
                 print(f"\n[INIT] Iteration {itr+1}/12")
                 self.update()
-
             print(f"\n[INIT] Initialization optimization completed")
 
+    def visualize_initialized_coordinates(self, tstamp, image, patches):
+        """Visualize extracted patch coordinates on the original image"""
+        print(f"\n[VIS_INIT] Visualizing initialized coordinates for frame {self.n} (timestamp: {tstamp})")
+
+        # Convert patches to coordinates
+        # patches shape: [1, N, 3, 1, 1] where last dims are [x, y, depth]
+        coords = patches[0, :, :2, 0, 0].cpu().numpy()  # Extract x, y coordinates
+
+        # Scale coordinates to match original image size
+        # The patches are extracted from downscaled feature maps (divided by RES)
+        coords_scaled = coords * self.RES
+
+        # Convert image to numpy for OpenCV
+        img_np = image.cpu().numpy()
+
+        # Handle different image formats
+        # Original image is typically in CHW format with values 0-255 (uint8)
+        if len(img_np.shape) == 3:
+            if img_np.shape[0] == 3:
+                # CHW format, convert to HWC
+                img_np = np.transpose(img_np, (1, 2, 0))
+
+            # Ensure the image is in uint8 format for proper display
+            if img_np.dtype != np.uint8:
+                # If float values, scale to 0-255 and convert
+                img_np = np.clip(img_np * 255, 0, 255).astype(np.uint8)
+
+        img_vis = img_np.copy()
+
+        # Draw coordinates on the image
+        num_points = len(coords_scaled)
+        print(f"[VIS_INIT] Total coordinates: {num_points}")
+        print(f"[VIS_INIT] Image shape: {img_vis.shape}, dtype: {img_vis.dtype}")
+        print(f"[VIS_INIT] RES: {self.RES}")
+        print(f"[VIS_INIT] First 5 coordinates (scaled): {coords_scaled[:5]}")
+
+        # Draw all coordinates but use smaller circles for less clutter
+        for i in range(num_points):
+            x, y = coords_scaled[i]
+            x_int, y_int = int(x), int(y)
+
+            # Check if coordinates are within image bounds
+            if 0 <= x_int < img_vis.shape[1] and 0 <= y_int < img_vis.shape[0]:
+                # Draw a small red circle (in BGR format)
+                cv2.circle(img_vis, (x_int, y_int), 2, (0, 0, 255), -1)
+
+                # Add index number for first 10 points only
+                if i < 10:
+                    cv2.putText(img_vis, f"{i}", (x_int + 3, y_int - 3),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+
+        # Save the visualization
+        output_dir = "/home/jerett/Project/DPVO/Debug/Data"
+        os.makedirs(output_dir, exist_ok=True)
+
+        filename = f"frame_{tstamp:06d}_init_coords.png"
+        output_path = os.path.join(output_dir, filename)
+
+        # Save the image as-is (assume it's already in the correct format)
+        cv2.imwrite(output_path, img_vis)
+
+        print(f"[VIS_INIT] Saved initialization visualization to: {output_path}")
+        print(f"[VIS_INIT] Visualized {num_points} coordinates on original image")
