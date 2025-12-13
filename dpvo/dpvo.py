@@ -514,10 +514,12 @@ class DPVO:
             self.viewer.update_image(image.contiguous())
         # print(f"{tstamp},image: {self.image_.shape},poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")
 
-        # Store original image for visualization if this is frame 7 (last initialization frame)
+        # Store original image for visualization
+        original_image = image.clone()  # Store before normalization
+
+        # Store original image for initialization if this is frame 7
         if self.n == 7:
-            # Make a copy before normalization
-            self.init_frame_image = image.cpu().numpy()  # Store original image as HWC uint8
+            self.init_frame_image = original_image.cpu().numpy()  # Store original image as HWC uint8
 
         ## image/intrinsics
         # save_image(tstamp,image)
@@ -627,6 +629,9 @@ class DPVO:
 
         # Print frame statistics using dedicated function
         self.print_frame_statistics(tstamp)
+
+        # Visualize feature points on current frame
+        self.visualize_feature_points(tstamp, original_image)
 
         # Visualize feature points from network output
 
@@ -742,6 +747,18 @@ class DPVO:
                 print(f"    Valid range (0.2-50m): {depth_valid_count}/{n_depth} ({100*depth_valid_count/n_depth:.1f}%)")
                 if depth_outlier_low > 0 or depth_outlier_high > 0:
                     print(f"    Outliers: <0.2m={depth_outlier_low}, >50m={depth_outlier_high}")
+
+    def visualize_feature_points(self, tstamp, original_image):
+        """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
+
+        image_bgr_left = original_image.cpu().permute(1, 2, 0).numpy()
+        image_bgr_right = image_bgr_left.copy()
+
+        frame_bgr = np.hstack([image_bgr_left,image_bgr_right])
+        # Save combined visualization
+        debug_dir = "/home/jerett/Project/DPVO/Debug/Image"
+        output_path = f"{debug_dir}/frame_{tstamp:06d}_visualization.png"
+        cv2.imwrite(output_path, frame_bgr)
 
     def debug_extract(self, tstamp, image, intrinsics):
 
