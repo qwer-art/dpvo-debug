@@ -842,9 +842,9 @@ class DPVO:
             )
 
         # 可视化文字
-        draw_text_with_idx(image_bgr_left, f"tstamp: {tstamp}", 1, text_color)
-        draw_text_with_idx(image_bgr_left, f"kframe: {self.n}/{self.counter}", 2, text_color)
-        draw_text_with_idx(image_bgr_left, f"dist: {self.distance:.2f}", 3, text_color)
+        draw_text_with_idx(image_bgr_left, f"tstamp: {tstamp}", 1, (255, 255, 255))
+        draw_text_with_idx(image_bgr_left, f"kframe: {self.n}/{self.counter}", 2, (255, 255, 255))
+        draw_text_with_idx(image_bgr_left, f"dist: {self.distance:.2f}", 3, (255, 255, 255))
 
         # 可视化关键点
         current_patches = self.pg.patches_[self.n - 1]
@@ -853,6 +853,9 @@ class DPVO:
         current_inv_depths = current_patches[:, 2,1,1].cpu().numpy()
         current_depths = 1.0 / current_inv_depths
         valid_mask = (current_depths > 0.2) & (current_depths < 50.0)
+
+        draw_text_with_idx(image_bgr_left, f"patch: {len(valid_mask)}/{len(current_patches)}", 4, (255, 255, 255))
+
 
         valid_indices = np.where(valid_mask)[0]
         valid_pixels = current_pixels[valid_indices]
@@ -938,29 +941,6 @@ class DPVO:
 
 
         ## 2.可视化右侧图像
-        # 2.1 显示前7帧关键帧信息
-        prev_frames = min(7, self.n)  # 最多显示前7帧
-
-        # 在右侧图像顶部显示信息
-        info_text = f"Previous: {prev_frames} / 7"
-        text_size_info = cv2.getTextSize(info_text, font, font_scale, font_thickness)[0]
-        cv2.rectangle(
-            image_bgr_right,
-            (10, 10),
-            (10 + text_size_info[0] + 10, 10 + text_size_info[1] + 10),
-            bg_color,
-            -1,
-        )
-        cv2.putText(
-            image_bgr_right,
-            info_text,
-            (15, 30),
-            font,
-            font_scale,
-            (255, 255, 255),
-            font_thickness,
-        )
-
         # 获取所有3D点云信息
         points = pops.point_cloud(
             SE3(self.poses),
@@ -971,91 +951,7 @@ class DPVO:
         points_3d = (
             (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3).cpu().numpy()
         )
-        print(f"[POINTS] All 3D points shape: {points_3d.shape}")
-
-        # 获取当前帧索引
-        current_frame_idx = self.n - 1 if self.n > 0 else 0
-
-        # 获取当前帧的pose
-        if self.n > 0:
-            current_pose = SE3(
-                self.poses[0, current_frame_idx]
-                if self.poses.dim() == 3
-                else self.poses[current_frame_idx]
-            )
-            print(
-                f"[POSE] Current frame {current_frame_idx} pose:\n{current_pose.data.cpu().numpy()}"
-            )
-
-        # 打印前5个点和最后5个点的坐标，共10个点
-        if len(points_3d) > 0:
-            print(f"[POINTS] First 5 and last 5 points coordinates (x,y,z):")
-
-            # 打印前5个点
-            for i in range(min(5, len(points_3d))):
-                x, y, z = points_3d[i]
-                print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
-
-            # 如果点数超过5个，打印最后5个点
-            if len(points_3d) > 5:
-                print("  ...")
-                start_idx = max(5, len(points_3d) - 5)
-                for i in range(start_idx, len(points_3d)):
-                    x, y, z = points_3d[i]
-                    print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
-
-        # 如果有多于一帧，获取前一帧的5个点
-        if (
-            self.n > 1
-            and hasattr(self, "pg")
-            and hasattr(self.pg, "patches_")
-            and self.pg.patches_ is not None
-        ):
-            prev_frame_idx = current_frame_idx - 1
-            if prev_frame_idx >= 0 and prev_frame_idx < len(self.pg.patches_):
-                try:
-                    # 获取前一帧的patches范围
-                    start_idx = prev_frame_idx * self.M
-                    end_idx = min(start_idx + self.M, self.m)
-
-                    if start_idx < self.m:
-                        # 获取前一帧的3D点
-                        prev_points = pops.point_cloud(
-                            SE3(self.poses),
-                            self.patches[:, start_idx:end_idx],
-                            self.intrinsics,
-                            self.ix[start_idx:end_idx],
-                        )
-
-                        if prev_points.dim() == 4 and prev_points.shape[1] > 0:
-                            prev_points_3d = (
-                                (
-                                    prev_points[..., 1, 1, :3]
-                                    / prev_points[..., 1, 1, 3:]
-                                )
-                                .reshape(-1, 3)
-                                .cpu()
-                                .numpy()
-                            )
-                            print(
-                                f"[POINTS] Previous frame {prev_frame_idx} first 5 and last 5 points coordinates:"
-                            )
-
-                            # 打印前5个点
-                            for i in range(min(5, len(prev_points_3d))):
-                                x, y, z = prev_points_3d[i]
-                                print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
-
-                            # 如果点数超过5个，打印最后5个点
-                            if len(prev_points_3d) > 5:
-                                print("  ...")
-                                start_idx = max(5, len(prev_points_3d) - 5)
-                                for i in range(start_idx, len(prev_points_3d)):
-                                    x, y, z = prev_points_3d[i]
-                                    print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
-                except Exception as e:
-                    print(f"[POINTS] Error getting previous frame points: {e}")
-
+        draw_text_with_idx(image_bgr_right, f"points: {len(points_3d)}", 1, (255, 255, 255))
         # endregion
 
         frame_bgr = np.hstack([image_bgr_left, image_bgr_right])
