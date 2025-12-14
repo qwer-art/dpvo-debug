@@ -942,6 +942,7 @@ class DPVO:
         print(f"[VIntr],intr: {intr}")
         print(f"[VPoint],total_points: {points_3d.shape}, proj_points: {proj_points_3d.shape}")
 
+        draw_text_with_idx(image_bgr_right, f"points: {len(points_3d)}", 1 , (255, 255, 255))
         # 投影到当前帧 - 使用矩阵操作优化
         if len(proj_points_3d) > 0:
             curr_pose_se3 = SE3(curr_pose)
@@ -988,7 +989,7 @@ class DPVO:
                     projected_depths = depths[boundary_mask]
 
                     # 显示投影点数量
-                    draw_text_with_idx(image_bgr_right, f"proj_points: {len(projected_pixels)}", 1, (255, 255, 255))
+                    draw_text_with_idx(image_bgr_right, f"proj_points: {len(projected_pixels)}", 2, (255, 255, 255))
 
                     # 按深度排序
                     sort_indices = np.argsort(projected_depths)
@@ -1058,14 +1059,14 @@ class DPVO:
                         2
                     )
             else:
-                draw_text_with_idx(image_bgr_right, "proj_points: 0", 1, (255, 255, 255))
+                draw_text_with_idx(image_bgr_right, "proj_points: 0", 2, (255, 255, 255))
         else:
-            draw_text_with_idx(image_bgr_right, "proj_points: 0", 1, (255, 255, 255))
+            draw_text_with_idx(image_bgr_right, "proj_points: 0", 2, (255, 255, 255))
 
         # endregion
 
         frame_bgr = np.hstack([image_bgr_left, image_bgr_right])
         # Save combined visualization
         debug_dir = "/home/jerett/Project/DPVO/Debug/Image"
-        output_path = f"{debug_dir}/frame_{tstamp:06d}_visualization.png"
+        output_path = f"{debug_dir}/frame_{tstamp:06d}.png"
         cv2.imwrite(output_path, frame_bgr)
