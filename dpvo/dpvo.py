@@ -923,35 +923,145 @@ class DPVO:
                         font,
                         0.5,
                         text_color,
-                        1
+                        2
                     )
         # endregion
 
         # region right
+        ## 2.可视化右侧图像 - 投影最后8帧的3D点
+        # 获取当前帧pose和内参
         curr_pose = self.pg.poses_[self.n - 1]
+        intr = self.intrinsics[0, self.n - 1]
 
-        pc_poses = SE3(self.poses)
-        pc_patches = self.patches[:, : self.m]
-        pc_intrinsics = self.intrinsics
-        pc_ix = self.ix[: self.m]
-        points = pops.point_cloud(pc_poses, pc_patches, pc_intrinsics, pc_ix)
-        points_3d = (
-            (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3).cpu().numpy()
-        )
+        # 使用已存储的点云数据
+        points_3d = self.pg.points_[:self.m]
+        proj_size = min(8 * self.M, len(points_3d))
+        proj_points_3d = points_3d[-proj_size:]  # 取最后8帧的点
 
+        print(f"[VPose],curr_pose: {curr_pose}")
+        print(f"[VIntr],intr: {intr}")
+        print(f"[VPoint],total_points: {points_3d.shape}, proj_points: {proj_points_3d.shape}")
 
-        ## 2.可视化右侧图像
-        # 获取所有3D点云信息
-        points = pops.point_cloud(
-            SE3(self.poses),
-            self.patches[:, : self.m],
-            self.intrinsics,
-            self.ix[: self.m],
-        )
-        points_3d = (
-            (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3).cpu().numpy()
-        )
-        draw_text_with_idx(image_bgr_right, f"points: {len(points_3d)}", 1, (255, 255, 255))
+        # 投影到当前帧 - 使用矩阵操作优化
+        if len(proj_points_3d) > 0:
+            curr_pose_se3 = SE3(curr_pose)
+            curr_pose_matrix = curr_pose_se3.matrix().squeeze().cpu().numpy()
+            fx, fy, cx, cy = intr.cpu().numpy()
+
+            # 批量转换为齐次坐标 (N, 4)
+            points_3d_np = proj_points_3d.cpu().numpy()
+            points_homo = np.hstack([points_3d_np, np.ones((len(points_3d_np), 1))])
+
+            # 批量转换到当前帧坐标系 (N, 4) = (4, 4) @ (4, N).T
+            points_cam = (curr_pose_matrix @ points_homo.T).T
+
+            # 检查点是否在相机前方 (深度 > 0)
+            valid_mask = points_cam[:, 2] > 0
+
+            if valid_mask.any():
+                # 只对有效点进行投影
+                valid_points_cam = points_cam[valid_mask]
+
+                # 批量投影到图像平面
+                depths = valid_points_cam[:, 2]
+                u_proj = ((fx * valid_points_cam[:, 0] / depths) + cx) * self.RES
+                v_proj = ((fy * valid_points_cam[:, 1] / depths) + cy) * self.RES
+
+                # 整数坐标和深度过滤
+                u_int = u_proj.astype(int)
+                v_int = v_proj.astype(int)
+
+                # 图像边界和深度范围过滤
+                image_h, image_w = image_bgr_right.shape[:2]
+                boundary_mask = (
+                    (u_int >= 0) & (u_int < image_w) &
+                    (v_int >= 0) & (v_int < image_h) &
+                    (depths > 0.2) & (depths < 50.0)
+                )
+
+                if boundary_mask.any():
+                    # 最终有效的投影点
+                    projected_pixels = np.column_stack([
+                        u_int[boundary_mask],
+                        v_int[boundary_mask]
+                    ])
+                    projected_depths = depths[boundary_mask]
+
+                    # 显示投影点数量
+                    draw_text_with_idx(image_bgr_right, f"proj_points: {len(projected_pixels)}", 1, (255, 255, 255))
+
+                    # 按深度排序
+                    sort_indices = np.argsort(projected_depths)
+                    sorted_depths = projected_depths[sort_indices]
+                    sorted_pixels = projected_pixels[sort_indices]
+
+                    # 深度采样，确保包含最小值和最大值
+                    num_samples = min(20, len(sorted_depths))
+                    if num_samples > 2:
+                        sample_indices = {0, len(sorted_depths) - 1}  # 最小值和最大值索引
+                        remaining_samples = num_samples - 2
+                        if remaining_samples > 0 and len(sorted_depths) > 2:
+                            middle_indices = np.linspace(1, len(sorted_depths) - 2, remaining_samples, dtype=int)
+                            sample_indices.update(middle_indices)
+                        sample_indices = sorted(list(sample_indices))
+                elif num_samples == 2:
+                    sample_indices = [0, len(sorted_depths) - 1]
+                else:
+                    sample_indices = [0]
+
+                depth_min = sorted_depths.min()
+                depth_max = sorted_depths.max()
+                depth_range = depth_max - depth_min
+
+                # 可视化所有有效投影点（按深度着色）
+                if depth_range > 0:
+                    for pixel, depth_val in zip(sorted_pixels, sorted_depths):
+                        u, v = pixel[0], pixel[1]
+                        depth_norm = (depth_val - depth_min) / depth_range
+                        cv2.circle(image_bgr_right, (u, v), 5, get_jet_color(depth_norm), -1)
+
+                # 为采样的20个点添加深度数值标签
+                for i, sample_idx in enumerate(sample_indices):
+                    pixel = sorted_pixels[sample_idx]
+                    depth_val = sorted_depths[sample_idx]
+                    u, v = pixel[0], pixel[1]
+
+                    # 添加深度数值标签
+                    depth_text = f"{depth_val:.2f}"
+                    text_size = cv2.getTextSize(depth_text, font, 0.5, 1)[0]
+
+                    # 确保文字不超出图像边界
+                    text_x = u + 5
+                    text_y = v - 5
+                    if text_x + text_size[0] > image_bgr_right.shape[1]:
+                        text_x = u - text_size[0] - 5
+                    if text_y < text_size[1]:
+                        text_y = v + text_size[1] + 5
+
+                    # 绘制文字背景
+                    cv2.rectangle(
+                        image_bgr_right,
+                        (text_x - 2, text_y - text_size[1] - 2),
+                        (text_x + text_size[0] + 2, text_y + 2),
+                        (0, 0, 0),
+                        -1
+                    )
+
+                    text_color = (0, 255, 255)
+                    cv2.putText(
+                        image_bgr_right,
+                        depth_text,
+                        (text_x, text_y),
+                        font,
+                        0.5,
+                        text_color,
+                        2
+                    )
+            else:
+                draw_text_with_idx(image_bgr_right, "proj_points: 0", 1, (255, 255, 255))
+        else:
+            draw_text_with_idx(image_bgr_right, "proj_points: 0", 1, (255, 255, 255))
+
         # endregion
 
         frame_bgr = np.hstack([image_bgr_left, image_bgr_right])
