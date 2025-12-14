@@ -686,7 +686,7 @@ class DPVO:
         if self.n == 8 and not self.is_initialized:
             self.is_initialized = True
 
-            for itr in range(12):
+            for _ in range(12):
                 self.update()
 
         elif self.is_initialized:
@@ -721,7 +721,7 @@ class DPVO:
             tstamp: Timestamp of the current frame
         """
         print(
-            f"\n[FRAME STATS] Timestamp: {tstamp},Distance: {self.distance:.3f},Keyframes/Counter: {self.n}/{self.counter}"
+            f"\n[STATS] Timestamp: {tstamp},Distance: {self.distance:.3f},Keyframes/Counter: {self.n}/{self.counter}"
         )
         print(f"[State],init: {self.is_initialized}")
         ### 1. Pose
@@ -803,6 +803,9 @@ class DPVO:
 
     def visualize_feature_points(self, tstamp, original_image):
         """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
+        print(
+            f"\n[Visual] Timestamp: {tstamp},Distance: {self.distance:.3f},Keyframes/Counter: {self.n}/{self.counter}"
+        )
 
         image_bgr_left = original_image.cpu().permute(1, 2, 0).numpy()
         image_bgr_right = image_bgr_left.copy()
@@ -838,170 +841,87 @@ class DPVO:
                 font_thickness,
             )
 
-        # 使用idx控制的不同文本
+        # 可视化文字
         draw_text_with_idx(image_bgr_left, f"tstamp: {tstamp}", 1, text_color)
         draw_text_with_idx(image_bgr_left, f"kframe: {self.n}/{self.counter}", 2, text_color)
         draw_text_with_idx(image_bgr_left, f"dist: {self.distance:.2f}", 3, text_color)
 
-
         # 可视化关键点
-        if (
-            self.m > 0
-            and hasattr(self, "pg")
-            and hasattr(self.pg, "patches_")
-            and self.pg.patches_ is not None
-        ):
-            # 获取当前帧的关键点坐标和深度
-            current_frame_idx = (
-                self.n - 1 if self.n > 0 and self.n <= len(self.pg.patches_) else 0
-            )
+        current_patches = self.pg.patches_[self.n - 1]
+        print(f"[VPatch]: {current_patches.shape}")
+        current_pixels = (current_patches[:,:2,1,1] * self.RES).cpu().numpy().astype(int)
+        current_inv_depths = current_patches[:, 2,1,1].cpu().numpy()
+        current_depths = 1.0 / current_inv_depths
+        valid_mask = (current_depths > 0.2) & (current_depths < 50.0)
 
-            if current_frame_idx < len(self.pg.patches_):
-                # 提取当前帧的patches
-                current_patches = self.pg.patches_[current_frame_idx]  # [M, 3, 3, 3]
+        valid_indices = np.where(valid_mask)[0]
+        valid_pixels = current_pixels[valid_indices]
+        valid_depths = current_depths[valid_indices]
+        if len(valid_indices) > 0:
+            # 深度排序
+            sort_indices = np.argsort(valid_depths)
+            sorted_depths = valid_depths[sort_indices]
+            sorted_pixels = valid_pixels[sort_indices]
 
-                # 获取关键点坐标 (patches的中心位置)
-                # patches格式: [x, y, depth] 在3x3的patch网格中
-                keypoints = current_patches[:, :2, 1, 1]  # [M, 2] (x, y坐标)
+            # 深度采样
+            num_samples = min(20, len(sorted_depths))
+            if num_samples > 2:
+                sample_indices = {0, len(sorted_depths) - 1}  # 最小值和最大值索引
+                remaining_samples = num_samples - 2
+                if remaining_samples > 0 and len(sorted_depths) > 2:
+                    middle_indices = np.linspace(1, len(sorted_depths) - 2, remaining_samples, dtype=int)
+                    sample_indices.update(middle_indices)
+                sample_indices = sorted(list(sample_indices))
+            elif num_samples == 2:
+                sample_indices = [0, len(sorted_depths) - 1]  # 最小值和最大值
+            else:
+                sample_indices = [0]
 
-                # 获取深度信息 (逆深度)
-                inv_depths = current_patches[:, 2, 1, 1]  # [M]
+            depth_min = sorted_depths.min()
+            depth_max = sorted_depths.max()
+            depth_range = depth_max - depth_min
 
-                # 转换为深度值（深度 = 1 / 逆深度）
-                depths = 1.0 / inv_depths
+            # 有效点可视化
+            if depth_range > 0:
+                for pixel, depth_val in zip(sorted_pixels, sorted_depths):
+                    u, v = pixel[0], pixel[1]
+                    if (0 <= u < image_bgr_left.shape[1] and 0 <= v < image_bgr_left.shape[0]):
+                        depth_norm = (depth_val - depth_min) / depth_range
+                        cv2.circle(image_bgr_left, (u, v), 5, get_jet_color(depth_norm), -1)
 
-                # 过滤有效的深度值
-                valid_mask = (depths > 0.2) & (depths < 50.0)  # 深度范围0.2m到50m
+            # 加上深度数值
+            for i, sample_idx in enumerate(sample_indices):
+                pixel = sorted_pixels[sample_idx]
+                depth_val = sorted_depths[sample_idx]
+                u, v = pixel[0], pixel[1]
 
-                # 显示关键点数量
-                total_keypoints = len(keypoints)
-                valid_keypoints_count = valid_mask.sum().item()
-                keypoints_text = f"Keypoints: {valid_keypoints_count}/{total_keypoints}"
-                draw_text_with_idx(image_bgr_left, keypoints_text, 4, text_color)
+                if (0 <= u < image_bgr_left.shape[1] and 0 <= v < image_bgr_left.shape[0]):
+                    depth_text = f"{depth_val:.2f}"
 
-                if valid_keypoints_count > 0:
-                    valid_depths = depths[valid_mask]
-                    valid_keypoints = keypoints[valid_mask]
+                    text_size = cv2.getTextSize(depth_text, font, 0.5, 1)[0]
 
-                    # 使用深度值而不是逆深度值进行颜色映射
-                    depth_min = valid_depths.min().item()
-                    depth_max = valid_depths.max().item()
-                    depth_range = depth_max - depth_min
+                    # 确保文字不超出图像边界
+                    text_x = u + 5
+                    text_y = v - 5
 
-                    if depth_range > 0:
-                        normalized_depths = (valid_depths - depth_min) / depth_range
-                    else:
-                        normalized_depths = torch.zeros_like(valid_depths)
-
-                    # 可视化当前帧的所有特征点，点的颜色按照jet的方式映射深度
-                    for i, (kp, depth_norm, depth_val) in enumerate(
-                        zip(valid_keypoints, normalized_depths, valid_depths)
-                    ):
-                        x, y = kp.cpu().numpy()
-
-                        # 缩放坐标到原始图像分辨率
-                        # patches坐标可能是在下采样后的特征空间中，需要乘以RES缩放因子
-                        x_scaled = int(x * self.RES)
-                        y_scaled = int(y * self.RES)
-
-                        # 确保坐标在图像范围内
-                        if (
-                            0 <= x_scaled < image_bgr_left.shape[1]
-                            and 0 <= y_scaled < image_bgr_left.shape[0]
-                        ):
-                            # 使用jet颜色映射（基于深度值）
-                            color = get_jet_color(depth_norm.item())
-
-                            # 绘制关键点：黑色背景 + 彩色圆点 + 白色边框
-                            cv2.circle(
-                                image_bgr_left, (x_scaled, y_scaled), 6, (0, 0, 0), -1
-                            )  # 黑色背景
-                            cv2.circle(
-                                image_bgr_left, (x_scaled, y_scaled), 5, color, -1
-                            )  # 彩色圆点
-                            cv2.circle(
-                                image_bgr_left,
-                                (x_scaled, y_scaled),
-                                6,
-                                (255, 255, 255),
-                                1,
-                            )  # 白色边框
-
-        # 关键点中均匀采样20个点，写上具体数值
-        if (
-            self.m > 0
-            and hasattr(self, "pg")
-            and hasattr(self.pg, "patches_")
-            and self.pg.patches_ is not None
-        ):
-            # 获取当前帧的关键点坐标和深度（复用前面的逻辑）
-            current_frame_idx = (
-                self.n - 1 if self.n > 0 and self.n <= len(self.pg.patches_) else 0
-            )
-
-            if current_frame_idx < len(self.pg.patches_):
-                # 提取当前帧的patches
-                current_patches = self.pg.patches_[current_frame_idx]  # [M, 3, 3, 3]
-
-                # 获取关键点坐标和深度信息
-                keypoints = current_patches[:, :2, 1, 1]  # [M, 2] (x, y坐标)
-                inv_depths = current_patches[:, 2, 1, 1]  # [M]
-                depths = 1.0 / inv_depths
-
-                # 过滤有效的深度值
-                valid_mask = (depths > 0.2) & (depths < 50.0)  # 深度范围0.2m到50m
-                valid_keypoints_count = valid_mask.sum().item()
-
-                if valid_keypoints_count > 0:
-                    valid_depths = depths[valid_mask]
-                    valid_keypoints = keypoints[valid_mask]
-
-                    # 计算采样间隔
-                    if valid_keypoints_count <= 20:
-                        sample_indices = list(range(valid_keypoints_count))
-                    else:
-                        step = valid_keypoints_count // 20
-                        sample_indices = [i * step for i in range(20)]
-
-                    # 对采样点添加深度值标注
-                    for i in sample_indices:
-                        if i < len(valid_keypoints):
-                            kp = valid_keypoints[i]
-                            depth_val = valid_depths[i]
-
-                            x, y = kp.cpu().numpy()
-                            x_scaled = int(x * self.RES)
-                            y_scaled = int(y * self.RES)
-
-                            # 确保坐标在图像范围内
-                            if (
-                                0 <= x_scaled < image_bgr_left.shape[1]
-                                and 0 <= y_scaled < image_bgr_left.shape[0]
-                            ):
-                                depth_text = f"{depth_val.item():.1f}m"
-
-                                # 添加黑色背景让文字更清晰
-                                (text_w, text_h), _ = cv2.getTextSize(
-                                    depth_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
-                                )
-                                cv2.rectangle(
-                                    image_bgr_left,
-                                    (x_scaled + 10, y_scaled - text_h - 5),
-                                    (x_scaled + 10 + text_w, y_scaled + 5),
-                                    (0, 0, 0),
-                                    -1,
-                                )
-
-                                # 用红色加粗文字标注深度值
-                                cv2.putText(
-                                    image_bgr_left,
-                                    depth_text,
-                                    (x_scaled + 10, y_scaled),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.5,
-                                    (0, 0, 255),
-                                    2,
-                                )
+                    # 绘制文字背景
+                    cv2.rectangle(
+                        image_bgr_left,
+                        (text_x - 2, text_y - text_size[1] - 2),
+                        (text_x + text_size[0] + 2, text_y + 2),
+                        (0, 0, 0),
+                        -1
+                    )
+                    text_color = (0, 255, 255)  # 黄色
+                    cv2.putText(
+                        image_bgr_left,
+                        depth_text,
+                        (text_x, text_y),
+                        font,
+                        0.5,
+                        text_color,
+                        1
+                    )
         # endregion
 
         # region right
