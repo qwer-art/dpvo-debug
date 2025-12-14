@@ -711,25 +711,7 @@ class DPVO:
         self.print_frame_statistics(tstamp, original_image)
 
         # Visualize feature points on current frame
-        # self.visualize_feature_points(tstamp, original_image)
-
-        # Visualize feature points from network output
-
-        # simple_dict = {
-        #     "pmem" : self.pg.pmem,
-        #     "DIM" : self.pg.DIM,
-        #     "n" : self.n,
-        #     "m" : self.m,
-        #     "M" : self.M,
-        #     "N" : self.N
-        # }
-        # save_simple_dict(tstamp,simple_dict)
-        # save_tstamp(tstamp,self.pg.tstamps_)
-        # save_poses(tstamp,self.pg.poses_)
-        # save_points(tstamp,self.pg.points_)
-        # save_colors(tstamp,self.pg.colors_)
-        # print(f"tstamp: {tstamp}")
-        # print(f"tstamp: {tstamp},n: {self.pg.n},m: {self.pg.m},M: {self.pg.M},N: {self.pg.N},poses: {array_save_poses.shape},points: {array_save_points.shape},colors: {array_save_colors.shape}")
+        self.visualize_feature_points(tstamp, original_image)
 
     def print_frame_statistics(self, tstamp, original_image):
         """
@@ -827,59 +809,42 @@ class DPVO:
 
         # region left
         ## 1.可视化左侧图像
-        # 1.1 显示相机时间戳
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.7
         font_thickness = 2
         text_color = (255, 255, 255)  # 白色文字
         bg_color = (0, 0, 0)  # 黑色背景
 
-        # 添加时间戳文本
-        timestamp_text = f"Timestamp: {tstamp}"
-        text_size = cv2.getTextSize(timestamp_text, font, font_scale, font_thickness)[0]
-        cv2.rectangle(
-            image_bgr_left,
-            (10, 10),
-            (10 + text_size[0] + 10, 10 + text_size[1] + 10),
-            bg_color,
-            -1,
-        )
-        cv2.putText(
-            image_bgr_left,
-            timestamp_text,
-            (15, 30),
-            font,
-            font_scale,
-            text_color,
-            font_thickness,
-        )
+        def draw_text_with_idx(img, text, idx, text_color=(255, 255, 255)):
+            """Draw text with automatic position calculation based on index"""
+            y_offset = 10 + (idx - 1) * 35  # Starting at y=10, 35px spacing
+            text_y_offset = 30 + (idx - 1) * 35  # Text position offset
 
-        # 1.2 显示关键帧信息
-        # 计算关键帧数量：在DPVO中，self.n表示当前存储的关键帧数量
-        # keyframe()函数会删除非关键帧，所以self.n就是关键帧数量
-        keyframe_count = self.n
-        keyframe_text = f"Keyframes: {keyframe_count}"
-        text_size_kf = cv2.getTextSize(keyframe_text, font, font_scale, font_thickness)[
-            0
-        ]
-        cv2.rectangle(
-            image_bgr_left,
-            (10, 45),
-            (10 + text_size_kf[0] + 10, 45 + text_size_kf[1] + 10),
-            bg_color,
-            -1,
-        )
-        cv2.putText(
-            image_bgr_left,
-            keyframe_text,
-            (15, 65),
-            font,
-            font_scale,
-            (255, 255, 255),
-            font_thickness,
-        )
+            text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+            cv2.rectangle(
+                img,
+                (10, y_offset),
+                (10 + text_size[0] + 10, y_offset + text_size[1] + 10),
+                bg_color,
+                -1,
+            )
+            cv2.putText(
+                img,
+                text,
+                (15, text_y_offset),
+                font,
+                font_scale,
+                text_color,
+                font_thickness,
+            )
 
-        # 1.3 可视化关键点
+        # 使用idx控制的不同文本
+        draw_text_with_idx(image_bgr_left, f"tstamp: {tstamp}", 1, text_color)
+        draw_text_with_idx(image_bgr_left, f"kframe: {self.n}/{self.counter}", 2, text_color)
+        draw_text_with_idx(image_bgr_left, f"dist: {self.distance:.2f}", 3, text_color)
+
+
+        # 可视化关键点
         if (
             self.m > 0
             and hasattr(self, "pg")
@@ -912,25 +877,7 @@ class DPVO:
                 total_keypoints = len(keypoints)
                 valid_keypoints_count = valid_mask.sum().item()
                 keypoints_text = f"Keypoints: {valid_keypoints_count}/{total_keypoints}"
-                text_size_kp = cv2.getTextSize(
-                    keypoints_text, font, font_scale, font_thickness
-                )[0]
-                cv2.rectangle(
-                    image_bgr_left,
-                    (10, 80),
-                    (10 + text_size_kp[0] + 10, 80 + text_size_kp[1] + 10),
-                    bg_color,
-                    -1,
-                )
-                cv2.putText(
-                    image_bgr_left,
-                    keypoints_text,
-                    (15, 100),
-                    font,
-                    font_scale,
-                    (255, 255, 255),
-                    font_thickness,
-                )
+                draw_text_with_idx(image_bgr_left, keypoints_text, 4, text_color)
 
                 if valid_keypoints_count > 0:
                     valid_depths = depths[valid_mask]
@@ -980,7 +927,7 @@ class DPVO:
                                 1,
                             )  # 白色边框
 
-        # 1.4 关键点中均匀采样20个点，写上具体数值
+        # 关键点中均匀采样20个点，写上具体数值
         if (
             self.m > 0
             and hasattr(self, "pg")
