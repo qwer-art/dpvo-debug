@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 import cv2  # For visualization
 
+
 def get_jet_color(value):
     """
     Generate matplotlib jet colormap color based on normalized value [0, 1].
@@ -50,6 +51,7 @@ def get_jet_color(value):
     # Convert to 0-255 range and return as BGR for OpenCV
     return (int(b * 255), int(g * 255), int(r * 255))
 
+
 from . import altcorr, fastba, lietorch
 from . import projective_ops as pops
 from .lietorch import SE3
@@ -57,6 +59,7 @@ from .net import VONet
 from .patchgraph import PatchGraph
 from .utils import *
 from .debug_utils import *
+
 
 # Create a logger class to redirect output
 class Logger:
@@ -74,7 +77,7 @@ class Logger:
 
             # Clear the log file at the start of each run
             try:
-                with open(Logger._log_file, 'w', encoding='utf-8') as f:
+                with open(Logger._log_file, "w", encoding="utf-8") as f:
                     # Write a header with run timestamp
                     run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     f.write(f"\n{'='*60}\n")
@@ -96,16 +99,18 @@ class Logger:
         # Write to file if it exists
         if self.log_file:
             # Add timestamp for important lines (those ending with newline)
-            if message.strip() and (message.endswith('\n') or len(message.strip()) > 10):
+            if message.strip() and (
+                message.endswith("\n") or len(message.strip()) > 10
+            ):
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 try:
-                    with open(self.log_file, 'a', encoding='utf-8') as f:
+                    with open(self.log_file, "a", encoding="utf-8") as f:
                         f.write(f"[{timestamp}] {message}")
                 except:
                     pass  # Silently ignore file write errors
             else:
                 try:
-                    with open(self.log_file, 'a', encoding='utf-8') as f:
+                    with open(self.log_file, "a", encoding="utf-8") as f:
                         f.write(message)
                 except:
                     pass  # Silently ignore file write errors
@@ -115,17 +120,18 @@ class Logger:
         self.terminal.flush()
         if self.log_file:
             try:
-                with open(self.log_file, 'a', encoding='utf-8') as f:
+                with open(self.log_file, "a", encoding="utf-8") as f:
                     f.flush()
             except:
                 pass
+
 
 # Initialize logger for this process
 logger = Logger()
 sys.stdout = logger
 sys.stderr = logger
 
-mp.set_start_method('spawn', True)
+mp.set_start_method("spawn", True)
 
 
 autocast = torch.cuda.amp.autocast
@@ -144,8 +150,8 @@ class DPVO:
         self.M = self.cfg.PATCHES_PER_FRAME
         self.N = self.cfg.BUFFER_SIZE
 
-        self.ht = ht    # image height
-        self.wd = wd    # image width
+        self.ht = ht  # image height
+        self.wd = wd  # image width
 
         DIM = self.DIM
         RES = self.RES
@@ -172,10 +178,10 @@ class DPVO:
             self.kwargs = kwargs = {"device": "cuda", "dtype": torch.float}
 
         ### frame memory size ###
-        self.pmem = self.mem = 36 # 32 was too small given default settings
+        self.pmem = self.mem = 36  # 32 was too small given default settings
         if self.cfg.LOOP_CLOSURE:
-            self.last_global_ba = -1000 # keep track of time since last global opt
-            self.pmem = self.cfg.MAX_EDGE_AGE # patch memory
+            self.last_global_ba = -1000  # keep track of time since last global opt
+            self.pmem = self.cfg.MAX_EDGE_AGE  # patch memory
 
         self.imap_ = torch.zeros(self.pmem, self.M, DIM, **kwargs)
         self.gmap_ = torch.zeros(self.pmem, self.M, 128, self.P, self.P, **kwargs)
@@ -199,6 +205,7 @@ class DPVO:
     def load_long_term_loop_closure(self):
         try:
             from .loop_closure.long_term import LongTermLoopClosure
+
             self.long_term_lc = LongTermLoopClosure(self.cfg, self.pg)
         except ModuleNotFoundError as e:
             self.cfg.CLASSIC_LOOP_CLOSURE = False
@@ -208,11 +215,12 @@ class DPVO:
         # load network from checkpoint file
         if isinstance(network, str):
             from collections import OrderedDict
+
             state_dict = torch.load(network)
             new_state_dict = OrderedDict()
             for k, v in state_dict.items():
                 if "update.lmbda" not in k:
-                    new_state_dict[k.replace('module.', '')] = v
+                    new_state_dict[k.replace("module.", "")] = v
 
             self.network = VONet()
             self.network.load_state_dict(new_state_dict)
@@ -234,11 +242,8 @@ class DPVO:
         intrinsics_ = torch.zeros(1, 4, dtype=torch.float32, device="cuda")
 
         self.viewer = Viewer(
-            self.image_,
-            self.pg.poses_,
-            self.pg.points_,
-            self.pg.colors_,
-            intrinsics_)
+            self.image_, self.pg.poses_, self.pg.points_, self.pg.colors_, intrinsics_
+        )
 
     @property
     def poses(self):
@@ -246,7 +251,7 @@ class DPVO:
 
     @property
     def patches(self):
-        return self.pg.patches_.view(1, self.N*self.M, 3, 3, 3)
+        return self.pg.patches_.view(1, self.N * self.M, 3, 3, 3)
 
     @property
     def intrinsics(self):
@@ -286,8 +291,8 @@ class DPVO:
 
         t0, dP = self.pg.delta[t]
         return dP * self.get_pose(t0)
-    
-    def get_lnkframe_tstamp(self,t):
+
+    def get_lnkframe_tstamp(self, t):
         if len(self.nkframe_tstamps) == 0:
             return -1
         return self.nkframe_tstamps[-1]
@@ -320,7 +325,7 @@ class DPVO:
         return poses, tstamps
 
     def corr(self, coords, indicies=None):
-        """ local correlation volume """
+        """local correlation volume"""
         ii, jj = indicies if indicies is not None else (self.pg.kk, self.pg.jj)
         ii1 = ii % (self.M * self.pmem)
         jj1 = jj % (self.mem)
@@ -329,16 +334,24 @@ class DPVO:
         return torch.stack([corr1, corr2], -1).view(1, len(ii), -1)
 
     def reproject(self, indicies=None):
-        """ reproject patch k from i -> j """
-        (ii, jj, kk) = indicies if indicies is not None else (self.pg.ii, self.pg.jj, self.pg.kk)
-        coords = pops.transform(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk)
+        """reproject patch k from i -> j"""
+        (ii, jj, kk) = (
+            indicies if indicies is not None else (self.pg.ii, self.pg.jj, self.pg.kk)
+        )
+        coords = pops.transform(
+            SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk
+        )
         return coords.permute(0, 1, 4, 2, 3).contiguous()
-    
+
     def reproject_debug(self, indicies=None):
-        """ reproject patch k from i -> j """
-        (ii, jj, kk) = indicies if indicies is not None else (self.pg.ii, self.pg.jj, self.pg.kk)
+        """reproject patch k from i -> j"""
+        (ii, jj, kk) = (
+            indicies if indicies is not None else (self.pg.ii, self.pg.jj, self.pg.kk)
+        )
         # coords = pops.transform(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk)
-        coords = pops.transform_debug(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk)
+        coords = pops.transform_debug(
+            SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk
+        )
         return coords.permute(0, 1, 4, 2, 3).contiguous()
 
     def append_factors(self, ii, jj):
@@ -355,20 +368,24 @@ class DPVO:
             self.pg.ii_inac = torch.cat((self.pg.ii_inac, self.pg.ii[m]))
             self.pg.jj_inac = torch.cat((self.pg.jj_inac, self.pg.jj[m]))
             self.pg.kk_inac = torch.cat((self.pg.kk_inac, self.pg.kk[m]))
-            self.pg.weight_inac = torch.cat((self.pg.weight_inac, self.pg.weight[:,m]), dim=1)
-            self.pg.target_inac = torch.cat((self.pg.target_inac, self.pg.target[:,m]), dim=1)
-        self.pg.weight = self.pg.weight[:,~m]
-        self.pg.target = self.pg.target[:,~m]
+            self.pg.weight_inac = torch.cat(
+                (self.pg.weight_inac, self.pg.weight[:, m]), dim=1
+            )
+            self.pg.target_inac = torch.cat(
+                (self.pg.target_inac, self.pg.target[:, m]), dim=1
+            )
+        self.pg.weight = self.pg.weight[:, ~m]
+        self.pg.target = self.pg.target[:, ~m]
 
         self.pg.ii = self.pg.ii[~m]
         self.pg.jj = self.pg.jj[~m]
         self.pg.kk = self.pg.kk[~m]
-        self.pg.net = self.pg.net[:,~m]
+        self.pg.net = self.pg.net[:, ~m]
         assert self.pg.ii.numel() == self.pg.weight.shape[1]
 
     def motion_probe(self):
-        """ kinda hacky way to ensure enough motion for initialization """
-        kk = torch.arange(self.m-self.M, self.m, device="cuda")
+        """kinda hacky way to ensure enough motion for initialization"""
+        kk = torch.arange(self.m - self.M, self.m, device="cuda")
         jj = self.n * torch.ones_like(kk)
         ii = self.ix[kk]
 
@@ -378,9 +395,10 @@ class DPVO:
 
         with autocast(enabled=self.cfg.MIXED_PRECISION):
             corr = self.corr(coords, indicies=(kk, jj))
-            ctx = self.imap[:,kk % (self.M * self.pmem)]
-            net, (delta, weight, _) = \
-                self.network.update(net, ctx, corr, None, ii, jj, kk)
+            ctx = self.imap[:, kk % (self.M * self.pmem)]
+            net, (delta, weight, _) = self.network.update(
+                net, ctx, corr, None, ii, jj, kk
+            )
 
         return torch.quantile(delta.norm(dim=-1).float(), 0.5)
 
@@ -390,7 +408,9 @@ class DPVO:
         jj = self.pg.jj[k]
         kk = self.pg.kk[k]
 
-        flow, _ = pops.flow_mag(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk, beta=0.5)
+        flow, _ = pops.flow_mag(
+            SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk, beta=0.5
+        )
         return flow.mean().item()
 
     def keyframe(self):
@@ -401,11 +421,11 @@ class DPVO:
 
         if m / 2 < self.cfg.KEYFRAME_THRESH:
             k = self.n - self.cfg.KEYFRAME_INDEX
-            t0 = self.pg.tstamps_[k-1]
+            t0 = self.pg.tstamps_[k - 1]
             t1 = self.pg.tstamps_[k]
             self.nkframe_tstamps.append(t1)
 
-            dP = SE3(self.pg.poses_[k]) * SE3(self.pg.poses_[k-1]).inv()
+            dP = SE3(self.pg.poses_[k]) * SE3(self.pg.poses_[k - 1]).inv()
             self.pg.delta[t1] = (t0, dP)
 
             to_remove = (self.pg.ii == k) | (self.pg.jj == k)
@@ -415,34 +435,38 @@ class DPVO:
             self.pg.ii[self.pg.ii > k] -= 1
             self.pg.jj[self.pg.jj > k] -= 1
 
-            for i in range(k, self.n-1):
-                self.pg.tstamps_[i] = self.pg.tstamps_[i+1]
-                self.pg.colors_[i] = self.pg.colors_[i+1]
-                self.pg.poses_[i] = self.pg.poses_[i+1]
-                self.pg.patches_[i] = self.pg.patches_[i+1]
-                self.pg.intrinsics_[i] = self.pg.intrinsics_[i+1]
+            for i in range(k, self.n - 1):
+                self.pg.tstamps_[i] = self.pg.tstamps_[i + 1]
+                self.pg.colors_[i] = self.pg.colors_[i + 1]
+                self.pg.poses_[i] = self.pg.poses_[i + 1]
+                self.pg.patches_[i] = self.pg.patches_[i + 1]
+                self.pg.intrinsics_[i] = self.pg.intrinsics_[i + 1]
 
-                self.imap_[i % self.pmem] = self.imap_[(i+1) % self.pmem]
-                self.gmap_[i % self.pmem] = self.gmap_[(i+1) % self.pmem]
-                self.fmap1_[0,i%self.mem] = self.fmap1_[0,(i+1)%self.mem]
-                self.fmap2_[0,i%self.mem] = self.fmap2_[0,(i+1)%self.mem]
+                self.imap_[i % self.pmem] = self.imap_[(i + 1) % self.pmem]
+                self.gmap_[i % self.pmem] = self.gmap_[(i + 1) % self.pmem]
+                self.fmap1_[0, i % self.mem] = self.fmap1_[0, (i + 1) % self.mem]
+                self.fmap2_[0, i % self.mem] = self.fmap2_[0, (i + 1) % self.mem]
 
             self.n -= 1
-            self.m-= self.M
+            self.m -= self.M
 
             if self.cfg.CLASSIC_LOOP_CLOSURE:
                 self.long_term_lc.keyframe(k)
 
-        to_remove = self.ix[self.pg.kk] < self.n - self.cfg.REMOVAL_WINDOW # Remove edges falling outside the optimization window
+        to_remove = (
+            self.ix[self.pg.kk] < self.n - self.cfg.REMOVAL_WINDOW
+        )  # Remove edges falling outside the optimization window
         if self.cfg.LOOP_CLOSURE:
             # ...unless they are being used for loop closure
-            lc_edges = ((self.pg.jj - self.pg.ii) > 30) & (self.pg.jj > (self.n - self.cfg.OPTIMIZATION_WINDOW))
+            lc_edges = ((self.pg.jj - self.pg.ii) > 30) & (
+                self.pg.jj > (self.n - self.cfg.OPTIMIZATION_WINDOW)
+            )
             to_remove = to_remove & ~lc_edges
         self.remove_factors(to_remove, store=True)
 
     def __run_global_BA(self):
-        """ Global bundle adjustment
-         Includes both active and inactive edges """
+        """Global bundle adjustment
+        Includes both active and inactive edges"""
         full_target = torch.cat((self.pg.target_inac, self.pg.target), dim=1)
         full_weight = torch.cat((self.pg.weight_inac, self.pg.weight), dim=1)
         full_ii = torch.cat((self.pg.ii_inac, self.pg.ii))
@@ -452,8 +476,22 @@ class DPVO:
         self.pg.normalize()
         lmbda = torch.as_tensor([1e-4], device="cuda")
         t0 = self.pg.ii.min().item()
-        fastba.BA(self.poses, self.patches, self.intrinsics,
-            full_target, full_weight, lmbda, full_ii, full_jj, full_kk, t0, self.n, M=self.M, iterations=2, eff_impl=True)
+        fastba.BA(
+            self.poses,
+            self.patches,
+            self.intrinsics,
+            full_target,
+            full_weight,
+            lmbda,
+            full_ii,
+            full_jj,
+            full_kk,
+            t0,
+            self.n,
+            M=self.M,
+            iterations=2,
+            eff_impl=True,
+        )
         self.ran_global_ba[self.n] = True
 
     def update(self):
@@ -466,12 +504,13 @@ class DPVO:
             with autocast(enabled=True):
                 corr = self.corr(coords)
                 ctx = self.imap[:, self.pg.kk % (self.M * self.pmem)]
-                self.pg.net, (delta, weight, _) = \
-                    self.network.update(self.pg.net, ctx, corr, None, self.pg.ii, self.pg.jj, self.pg.kk)
+                self.pg.net, (delta, weight, _) = self.network.update(
+                    self.pg.net, ctx, corr, None, self.pg.ii, self.pg.jj, self.pg.kk
+                )
 
             lmbda = torch.as_tensor([1e-4], device="cuda")
             weight = weight.float()
-            target = coords[...,self.P//2,self.P//2] + delta.float()
+            target = coords[..., self.P // 2, self.P // 2] + delta.float()
 
         self.pg.target = target
         self.pg.weight = weight
@@ -479,19 +518,44 @@ class DPVO:
         with Timer("BA", enabled=self.enable_timing):
             try:
                 # run global bundle adjustment if there exist long-range edges
-                if (self.pg.ii < self.n - self.cfg.REMOVAL_WINDOW - 1).any() and not self.ran_global_ba[self.n]:
+                if (
+                    self.pg.ii < self.n - self.cfg.REMOVAL_WINDOW - 1
+                ).any() and not self.ran_global_ba[self.n]:
                     self.__run_global_BA()
                 else:
-                    t0 = self.n - self.cfg.OPTIMIZATION_WINDOW if self.is_initialized else 1
+                    t0 = (
+                        self.n - self.cfg.OPTIMIZATION_WINDOW
+                        if self.is_initialized
+                        else 1
+                    )
                     t0 = max(t0, 1)
-                    fastba.BA(self.poses, self.patches, self.intrinsics, 
-                        target, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
+                    fastba.BA(
+                        self.poses,
+                        self.patches,
+                        self.intrinsics,
+                        target,
+                        weight,
+                        lmbda,
+                        self.pg.ii,
+                        self.pg.jj,
+                        self.pg.kk,
+                        t0,
+                        self.n,
+                        M=self.M,
+                        iterations=2,
+                        eff_impl=False,
+                    )
             except:
                 print("Warning BA failed...")
 
-            points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
-            points = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3)
-            self.pg.points_[:len(points)] = points[:]
+            points = pops.point_cloud(
+                SE3(self.poses),
+                self.patches[:, : self.m],
+                self.intrinsics,
+                self.ix[: self.m],
+            )
+            points = (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3)
+            self.pg.points_[: len(points)] = points[:]
 
     def update_debug(self):
         with Timer("other", enabled=self.enable_timing):
@@ -500,12 +564,13 @@ class DPVO:
             with autocast(enabled=True):
                 corr = self.corr(coords)
                 ctx = self.imap[:, self.pg.kk % (self.M * self.pmem)]
-                self.pg.net, (delta, weight, _) = \
-                    self.network.update(self.pg.net, ctx, corr, None, self.pg.ii, self.pg.jj, self.pg.kk)
+                self.pg.net, (delta, weight, _) = self.network.update(
+                    self.pg.net, ctx, corr, None, self.pg.ii, self.pg.jj, self.pg.kk
+                )
 
             lmbda = torch.as_tensor([1e-4], device="cuda")
             weight = weight.float()
-            target = coords[...,self.P//2,self.P//2] + delta.float()
+            target = coords[..., self.P // 2, self.P // 2] + delta.float()
 
         self.pg.target = target
         self.pg.weight = weight
@@ -513,43 +578,72 @@ class DPVO:
         with Timer("BA", enabled=self.enable_timing):
             try:
                 # run global bundle adjustment if there exist long-range edges
-                if (self.pg.ii < self.n - self.cfg.REMOVAL_WINDOW - 1).any() and not self.ran_global_ba[self.n]:
+                if (
+                    self.pg.ii < self.n - self.cfg.REMOVAL_WINDOW - 1
+                ).any() and not self.ran_global_ba[self.n]:
                     self.__run_global_BA()
                 else:
-                    t0 = self.n - self.cfg.OPTIMIZATION_WINDOW if self.is_initialized else 1
+                    t0 = (
+                        self.n - self.cfg.OPTIMIZATION_WINDOW
+                        if self.is_initialized
+                        else 1
+                    )
                     t0 = max(t0, 1)
-                    fastba.BA(self.poses, self.patches, self.intrinsics,
-                        target, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
+                    fastba.BA(
+                        self.poses,
+                        self.patches,
+                        self.intrinsics,
+                        target,
+                        weight,
+                        lmbda,
+                        self.pg.ii,
+                        self.pg.jj,
+                        self.pg.kk,
+                        t0,
+                        self.n,
+                        M=self.M,
+                        iterations=2,
+                        eff_impl=False,
+                    )
             except:
                 print("Warning BA failed...")
 
-            points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
-            points = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3)
-            self.pg.points_[:len(points)] = points[:]
-
+            points = pops.point_cloud(
+                SE3(self.poses),
+                self.patches[:, : self.m],
+                self.intrinsics,
+                self.ix[: self.m],
+            )
+            points = (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3)
+            self.pg.points_[: len(points)] = points[:]
 
     def __edges_forw(self):
-        r=self.cfg.PATCH_LIFETIME
+        r = self.cfg.PATCH_LIFETIME
         t0 = self.M * max((self.n - r), 0)
         t1 = self.M * max((self.n - 1), 0)
         return flatmeshgrid(
             torch.arange(t0, t1, device="cuda"),
-            torch.arange(self.n-1, self.n, device="cuda"), indexing='ij')
+            torch.arange(self.n - 1, self.n, device="cuda"),
+            indexing="ij",
+        )
 
     def __edges_back(self):
-        r=self.cfg.PATCH_LIFETIME
+        r = self.cfg.PATCH_LIFETIME
         t0 = self.M * max((self.n - 1), 0)
         t1 = self.M * max((self.n - 0), 0)
-        return flatmeshgrid(torch.arange(t0, t1, device="cuda"),
-            torch.arange(max(self.n-r, 0), self.n, device="cuda"), indexing='ij')
+        return flatmeshgrid(
+            torch.arange(t0, t1, device="cuda"),
+            torch.arange(max(self.n - r, 0), self.n, device="cuda"),
+            indexing="ij",
+        )
 
     def __call__(self, tstamp, image, intrinsics):
-        """ track new frame """
+        """track new frame"""
 
         # Print frame separator with timestamp
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print(f"[FRAME] Processing Frame #{tstamp}")
-        print("="*80)
+        print("=" * 80)
 
         # Store current timestamp for use in update()
         self.current_timestamp = tstamp
@@ -557,8 +651,10 @@ class DPVO:
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc(image, self.n)
 
-        if (self.n+1) >= self.N:
-            raise Exception(f'The buffer size is too small. You can increase it using "--opts BUFFER_SIZE={self.N*2}"')
+        if (self.n + 1) >= self.N:
+            raise Exception(
+                f'The buffer size is too small. You can increase it using "--opts BUFFER_SIZE={self.N*2}"'
+            )
 
         if self.viewer is not None:
             self.viewer.update_image(image.contiguous())
@@ -569,21 +665,24 @@ class DPVO:
 
         # Store original image for initialization if this is frame 7
         if self.n == 7:
-            self.init_frame_image = original_image.cpu().numpy()  # Store original image as HWC uint8
+            self.init_frame_image = (
+                original_image.cpu().numpy()
+            )  # Store original image as HWC uint8
 
         ## image/intrinsics
         # save_image(tstamp,image)
         # save_intrinsics(tstamp,intrinsics)
 
-        image = 2 * (image[None,None] / 255.0) - 0.5
+        image = 2 * (image[None, None] / 255.0) - 0.5
 
         with autocast(enabled=self.cfg.MIXED_PRECISION):
-            fmap, gmap, imap, patches, _, clr = \
-                self.network.patchify(image,
-                    patches_per_image=self.cfg.PATCHES_PER_FRAME, 
-                    centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
-                    return_color=True)
-            
+            fmap, gmap, imap, patches, _, clr = self.network.patchify(
+                image,
+                patches_per_image=self.cfg.PATCHES_PER_FRAME,
+                centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT,
+                return_color=True,
+            )
+
         # print(f"ts: {tstamp},image: {image.shape},fmap: {fmap.shape},gmap: {gmap.shape},imap: {imap.shape},patches: {patches.shape},clr: {clr.shape}")
 
         # pred_feature = (fmap, gmap, imap, patches, _, clr)
@@ -595,33 +694,33 @@ class DPVO:
         self.pg.intrinsics_[self.n] = intrinsics / self.RES
 
         # color info for visualization
-        clr = (clr[0,:,[2,1,0]] + 0.5) * (255.0 / 2)
+        clr = (clr[0, :, [2, 1, 0]] + 0.5) * (255.0 / 2)
         self.pg.colors_[self.n] = clr.to(torch.uint8)
 
         self.pg.index_[self.n + 1] = self.n + 1
         self.pg.index_map_[self.n + 1] = self.m + self.M
 
         if self.n > 1:
-            if self.cfg.MOTION_MODEL == 'DAMPED_LINEAR':
-                P1 = SE3(self.pg.poses_[self.n-1])
-                P2 = SE3(self.pg.poses_[self.n-2])
+            if self.cfg.MOTION_MODEL == "DAMPED_LINEAR":
+                P1 = SE3(self.pg.poses_[self.n - 1])
+                P2 = SE3(self.pg.poses_[self.n - 2])
 
                 # To deal with varying camera hz
-                *_, a,b,c = [1]*3 + self.tlist
-                fac = (c-b) / (b-a)
+                *_, a, b, c = [1] * 3 + self.tlist
+                fac = (c - b) / (b - a)
 
                 xi = self.cfg.MOTION_DAMPING * fac * (P1 * P2.inv()).log()
                 tvec_qvec = (SE3.exp(xi) * P1).data
                 self.pg.poses_[self.n] = tvec_qvec
             else:
-                tvec_qvec = self.poses[self.n-1]
+                tvec_qvec = self.poses[self.n - 1]
                 self.pg.poses_[self.n] = tvec_qvec
 
         # TODO better depth initialization
-        patches[:,:,2] = torch.rand_like(patches[:,:,2,0,0,None,None])
+        patches[:, :, 2] = torch.rand_like(patches[:, :, 2, 0, 0, None, None])
         if self.is_initialized:
-            s = torch.median(self.pg.patches_[self.n-3:self.n,:,2])
-            patches[:,:,2] = s
+            s = torch.median(self.pg.patches_[self.n - 3 : self.n, :, 2])
+            patches[:, :, 2] = s
 
         self.pg.patches_[self.n] = patches
 
@@ -631,7 +730,7 @@ class DPVO:
         self.fmap1_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 1, 1)
         self.fmap2_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 4, 4)
 
-        self.counter += 1       
+        self.counter += 1
         if self.n > 0 and not self.is_initialized:
             if self.motion_probe() < 2.0:
                 self.pg.delta[self.counter - 1] = (self.counter - 2, Id[0])
@@ -642,7 +741,7 @@ class DPVO:
 
         if self.cfg.LOOP_CLOSURE:
             if self.n - self.last_global_ba >= self.cfg.GLOBAL_OPT_FREQ:
-                """ Add loop closure factors """
+                """Add loop closure factors"""
                 lii, ljj = self.pg.edges_loop()
                 if lii.numel() > 0:
                     self.last_global_ba = self.n
@@ -665,7 +764,7 @@ class DPVO:
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc.attempt_loop_closure(self.n)
             self.long_term_lc.lc_callback()
-        
+
         # region debug
         # index = self.n - 1
         # pg_tstamp = self.pg.tstamps_[index]
@@ -677,7 +776,7 @@ class DPVO:
         # print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
 
         # Print frame statistics using dedicated function
-        self.print_frame_statistics(tstamp,original_image)
+        self.print_frame_statistics(tstamp, original_image)
 
         # Visualize feature points on current frame
         # self.visualize_feature_points(tstamp, original_image)
@@ -707,33 +806,44 @@ class DPVO:
         Args:
             tstamp: Timestamp of the current frame
         """
-        print(f"\n[FRAME STATS] Timestamp: {tstamp},Keyframes: {self.n} / {self.counter}")
-        ### 1. Pose 
+        print(
+            f"\n[FRAME STATS] Timestamp: {tstamp},Keyframes/Counter: {self.n}/{self.counter}"
+        )
+        print(f"[State],init: {self.is_initialized}")
+        ### 1. Pose
         # 使用map key的方式去重，获取所有有效时间戳，一堆无效的都聚集在0上
         kframe_trajs = {}
         for i in range(self.n):
             kframe_trajs[self.pg.tstamps_[i]] = self.pg.poses_[i]
 
         nkframe_tstamp = self.get_lnkframe_tstamp(tstamp)
-        print(f"[Pose],kframe_size: {len(kframe_trajs)},last_notkey_tstamp: {nkframe_tstamp}")
+        print(
+            f"[Pose],kframe_size: {len(kframe_trajs)},last_notkey_tstamp: {nkframe_tstamp}"
+        )
         # 使用正确的pose获取方式：通过轨迹插值获取当前帧的准确pose
         curr_tstamp = self.pg.tstamps_[self.n - 1]
         curr_pose = self.pg.poses_[self.n - 1]
-        print(f"[Pose],tstamp: {tstamp},curr_tstamp: {curr_tstamp},curr_pose: {curr_pose}")
+        print(
+            f"[Pose],tstamp: {tstamp},curr_tstamp: {curr_tstamp},curr_pose: {curr_pose}"
+        )
 
         ### 2. Patch
-        patch_pixels = self.patches[:, :self.m, :2, 1, 1]
-        patch_inv_depths = self.patches[:, :self.m, 2, 1, 1]
+        patch_pixels = self.patches[:, : self.m, :2, 1, 1]
+        patch_inv_depths = self.patches[:, : self.m, 2, 1, 1]
         image_bgr = original_image.cpu().permute(1, 2, 0).numpy()
 
-        print(f"[Patch],pixels: {patch_pixels.shape},inv_depths: {patch_inv_depths.shape}")
+        print(
+            f"[Patch],pixels: {patch_pixels.shape},inv_depths: {patch_inv_depths.shape}"
+        )
         print(f"[Patch],image_shape: {image_bgr.shape}")
-        minu = int(patch_pixels[...,0].min().item())
-        maxu = int(patch_pixels[...,0].max().item())
-        minv = int(patch_pixels[...,1].min().item())
-        maxv = int(patch_pixels[...,1].max().item())
+        minu = int(patch_pixels[..., 0].min().item())
+        maxu = int(patch_pixels[..., 0].max().item())
+        minv = int(patch_pixels[..., 1].min().item())
+        maxv = int(patch_pixels[..., 1].max().item())
 
-        print(f"[Patch],batch_range,top_left: [{minu},{minv}],bottom_right: [{maxu},{maxv}]")
+        print(
+            f"[Patch],batch_range,top_left: [{minu},{minv}],bottom_right: [{maxu},{maxv}]"
+        )
 
         inv_depth_min = patch_inv_depths.min().item()
         inv_depth_max = patch_inv_depths.max().item()
@@ -745,67 +855,37 @@ class DPVO:
         print(f"[Patch] inv_depth: {inv_depth_min:.3f} - {inv_depth_max:.3f}")
         print(f"[Patch] depth: {depth_min:.3f} - {depth_max:.3f}")
 
+        ### 3. Points
+        pc_poses = SE3(self.poses)
+        pc_patches = self.patches[:, : self.m]
+        pc_intrinsics = self.intrinsics
+        pc_ix = self.ix[: self.m]
+        points = pops.point_cloud(pc_poses, pc_patches, pc_intrinsics, pc_ix)
+        points_3d = (
+            (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3).cpu().numpy()
+        )
+        print(f"[Point],points: {points.shape}")
+        print(f"[Point],points_3d: {points_3d.shape}")
+        kk_values = self.pg.kk[: self.m]
+        ii_values = self.pg.ii[: self.m]
+        pixel_coords = self.patches[0, : self.m, :2, 1, 1]
+        if self.m <= 10:
+            # 如果点数少于等于10个，取所有点
+            sample_indices = list(range(self.m))
+        else:
+            # 均匀采样10个点
+            step = self.m // 10
+            sample_indices = [i * step for i in range(10)]
 
-
-        # 2. Process inverse depth and depth statistics
-        if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
-            # Extract center pixel of each patch
-            inv_depths = self.patches[0, :self.m, 2, 1, 1]  # Shape: [m]
-
-            # Count valid 3D points based on inverse depth range
-            valid_mask = (inv_depths >= 0.02) & (inv_depths <= 5.0)
-            valid_3d_points = valid_mask.sum().item()
-            print(f"  Valid 3D points: {valid_3d_points}")
-
-            # Inverse depth statistics
-            inv_depth_min = inv_depths.min().item()
-            inv_depth_max = inv_depths.max().item()
-            inv_depth_mean = inv_depths.mean().item()
-            inv_depth_median = inv_depths.median().item()
-            inv_depth_std = inv_depths.std().item()
-
-            # Calculate percentiles
-            inv_depths_sorted, _ = torch.sort(inv_depths)
-            n = len(inv_depths_sorted)
-            p25 = inv_depths_sorted[int(n * 0.25)].item()
-            p75 = inv_depths_sorted[int(n * 0.75)].item()
-            p95 = inv_depths_sorted[int(n * 0.95)].item()
-
-            # Count outliers
-            valid_range_mask = (inv_depths >= 0.02) & (inv_depths <= 5.0)
-            valid_count = valid_range_mask.sum().item()
-            outlier_low_count = (inv_depths < 0.02).sum().item()
-            outlier_high_count = (inv_depths > 5.0).sum().item()
-
-            print(f"  [STATS] InvDepth: {inv_depth_min:.6f}-{inv_depth_max:.6f}, valid: {100*valid_count/n:.1f}%")
-
-            # Depth statistics
-            valid_inv_depths = inv_depths[(inv_depths >= 0.02) & (inv_depths <= 5.0)]
-            if len(valid_inv_depths) > 0:
-                depths = 1.0 / valid_inv_depths
-
-                # Calculate depth statistics
-                depth_min = depths.min().item()
-                depth_max = depths.max().item()
-                depth_mean = depths.mean().item()
-                depth_median = depths.median().item()
-                depth_std = depths.std().item()
-
-                # Calculate depth percentiles
-                depths_sorted, _ = torch.sort(depths)
-                n_depth = len(depths_sorted)
-                depth_p25 = depths_sorted[int(n_depth * 0.25)].item()
-                depth_p75 = depths_sorted[int(n_depth * 0.75)].item()
-                depth_p95 = depths_sorted[int(n_depth * 0.95)].item()
-
-                # Count depth outliers
-                depth_valid_mask = (depths >= 0.2) & (depths <= 50.0)
-                depth_valid_count = depth_valid_mask.sum().item()
-                depth_outlier_low = (depths < 0.2).sum().item()
-                depth_outlier_high = (depths > 50.0).sum().item()
-
-                print(f"  [STATS] Depth: {depth_min:.3f}-{depth_max:.3f}m, valid: {100*depth_valid_count/n_depth:.1f}%")
-
+        for point_idx in sample_indices:
+            point_ii = ii_values[point_idx].item()
+            point_kk = kk_values[point_idx].item()
+            pixel_u = int(patch_pixels[0, point_idx, 0].item())
+            pixel_v = int(patch_pixels[0, point_idx, 1].item())
+            point_3d = points_3d[point_idx]
+            print(
+                f"[Point],idx: {point_idx},ii: {point_ii},kk: {point_kk},pixel: ({pixel_u},{pixel_v}),point: ({point_3d[0]:.2f},{point_3d[1]:.2f},{point_3d[2]:.2f})"
+            )
 
     def visualize_feature_points(self, tstamp, original_image):
         """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
@@ -825,22 +905,59 @@ class DPVO:
         # 添加时间戳文本
         timestamp_text = f"Timestamp: {tstamp}"
         text_size = cv2.getTextSize(timestamp_text, font, font_scale, font_thickness)[0]
-        cv2.rectangle(image_bgr_left, (10, 10), (10 + text_size[0] + 10, 10 + text_size[1] + 10), bg_color, -1)
-        cv2.putText(image_bgr_left, timestamp_text, (15, 30), font, font_scale, text_color, font_thickness)
+        cv2.rectangle(
+            image_bgr_left,
+            (10, 10),
+            (10 + text_size[0] + 10, 10 + text_size[1] + 10),
+            bg_color,
+            -1,
+        )
+        cv2.putText(
+            image_bgr_left,
+            timestamp_text,
+            (15, 30),
+            font,
+            font_scale,
+            text_color,
+            font_thickness,
+        )
 
         # 1.2 显示关键帧信息
         # 计算关键帧数量：在DPVO中，self.n表示当前存储的关键帧数量
         # keyframe()函数会删除非关键帧，所以self.n就是关键帧数量
         keyframe_count = self.n
         keyframe_text = f"Keyframes: {keyframe_count}"
-        text_size_kf = cv2.getTextSize(keyframe_text, font, font_scale, font_thickness)[0]
-        cv2.rectangle(image_bgr_left, (10, 45), (10 + text_size_kf[0] + 10, 45 + text_size_kf[1] + 10), bg_color, -1)
-        cv2.putText(image_bgr_left, keyframe_text, (15, 65), font, font_scale, (255, 255, 255), font_thickness)
+        text_size_kf = cv2.getTextSize(keyframe_text, font, font_scale, font_thickness)[
+            0
+        ]
+        cv2.rectangle(
+            image_bgr_left,
+            (10, 45),
+            (10 + text_size_kf[0] + 10, 45 + text_size_kf[1] + 10),
+            bg_color,
+            -1,
+        )
+        cv2.putText(
+            image_bgr_left,
+            keyframe_text,
+            (15, 65),
+            font,
+            font_scale,
+            (255, 255, 255),
+            font_thickness,
+        )
 
         # 1.3 可视化关键点
-        if self.m > 0 and hasattr(self, 'pg') and hasattr(self.pg, 'patches_') and self.pg.patches_ is not None:
+        if (
+            self.m > 0
+            and hasattr(self, "pg")
+            and hasattr(self.pg, "patches_")
+            and self.pg.patches_ is not None
+        ):
             # 获取当前帧的关键点坐标和深度
-            current_frame_idx = self.n - 1 if self.n > 0 and self.n <= len(self.pg.patches_) else 0
+            current_frame_idx = (
+                self.n - 1 if self.n > 0 and self.n <= len(self.pg.patches_) else 0
+            )
 
             if current_frame_idx < len(self.pg.patches_):
                 # 提取当前帧的patches
@@ -863,9 +980,25 @@ class DPVO:
                 total_keypoints = len(keypoints)
                 valid_keypoints_count = valid_mask.sum().item()
                 keypoints_text = f"Keypoints: {valid_keypoints_count}/{total_keypoints}"
-                text_size_kp = cv2.getTextSize(keypoints_text, font, font_scale, font_thickness)[0]
-                cv2.rectangle(image_bgr_left, (10, 80), (10 + text_size_kp[0] + 10, 80 + text_size_kp[1] + 10), bg_color, -1)
-                cv2.putText(image_bgr_left, keypoints_text, (15, 100), font, font_scale, (255, 255, 255), font_thickness)
+                text_size_kp = cv2.getTextSize(
+                    keypoints_text, font, font_scale, font_thickness
+                )[0]
+                cv2.rectangle(
+                    image_bgr_left,
+                    (10, 80),
+                    (10 + text_size_kp[0] + 10, 80 + text_size_kp[1] + 10),
+                    bg_color,
+                    -1,
+                )
+                cv2.putText(
+                    image_bgr_left,
+                    keypoints_text,
+                    (15, 100),
+                    font,
+                    font_scale,
+                    (255, 255, 255),
+                    font_thickness,
+                )
 
                 if valid_keypoints_count > 0:
                     valid_depths = depths[valid_mask]
@@ -882,7 +1015,9 @@ class DPVO:
                         normalized_depths = torch.zeros_like(valid_depths)
 
                     # 可视化当前帧的所有特征点，点的颜色按照jet的方式映射深度
-                    for i, (kp, depth_norm, depth_val) in enumerate(zip(valid_keypoints, normalized_depths, valid_depths)):
+                    for i, (kp, depth_norm, depth_val) in enumerate(
+                        zip(valid_keypoints, normalized_depths, valid_depths)
+                    ):
                         x, y = kp.cpu().numpy()
 
                         # 缩放坐标到原始图像分辨率
@@ -891,19 +1026,39 @@ class DPVO:
                         y_scaled = int(y * self.RES)
 
                         # 确保坐标在图像范围内
-                        if 0 <= x_scaled < image_bgr_left.shape[1] and 0 <= y_scaled < image_bgr_left.shape[0]:
+                        if (
+                            0 <= x_scaled < image_bgr_left.shape[1]
+                            and 0 <= y_scaled < image_bgr_left.shape[0]
+                        ):
                             # 使用jet颜色映射（基于深度值）
                             color = get_jet_color(depth_norm.item())
 
                             # 绘制关键点：黑色背景 + 彩色圆点 + 白色边框
-                            cv2.circle(image_bgr_left, (x_scaled, y_scaled), 6, (0, 0, 0), -1)  # 黑色背景
-                            cv2.circle(image_bgr_left, (x_scaled, y_scaled), 5, color, -1)      # 彩色圆点
-                            cv2.circle(image_bgr_left, (x_scaled, y_scaled), 6, (255, 255, 255), 1)  # 白色边框
+                            cv2.circle(
+                                image_bgr_left, (x_scaled, y_scaled), 6, (0, 0, 0), -1
+                            )  # 黑色背景
+                            cv2.circle(
+                                image_bgr_left, (x_scaled, y_scaled), 5, color, -1
+                            )  # 彩色圆点
+                            cv2.circle(
+                                image_bgr_left,
+                                (x_scaled, y_scaled),
+                                6,
+                                (255, 255, 255),
+                                1,
+                            )  # 白色边框
 
         # 1.4 关键点中均匀采样20个点，写上具体数值
-        if self.m > 0 and hasattr(self, 'pg') and hasattr(self.pg, 'patches_') and self.pg.patches_ is not None:
+        if (
+            self.m > 0
+            and hasattr(self, "pg")
+            and hasattr(self.pg, "patches_")
+            and self.pg.patches_ is not None
+        ):
             # 获取当前帧的关键点坐标和深度（复用前面的逻辑）
-            current_frame_idx = self.n - 1 if self.n > 0 and self.n <= len(self.pg.patches_) else 0
+            current_frame_idx = (
+                self.n - 1 if self.n > 0 and self.n <= len(self.pg.patches_) else 0
+            )
 
             if current_frame_idx < len(self.pg.patches_):
                 # 提取当前帧的patches
@@ -940,19 +1095,34 @@ class DPVO:
                             y_scaled = int(y * self.RES)
 
                             # 确保坐标在图像范围内
-                            if 0 <= x_scaled < image_bgr_left.shape[1] and 0 <= y_scaled < image_bgr_left.shape[0]:
+                            if (
+                                0 <= x_scaled < image_bgr_left.shape[1]
+                                and 0 <= y_scaled < image_bgr_left.shape[0]
+                            ):
                                 depth_text = f"{depth_val.item():.1f}m"
 
                                 # 添加黑色背景让文字更清晰
-                                (text_w, text_h), _ = cv2.getTextSize(depth_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-                                cv2.rectangle(image_bgr_left,
-                                            (x_scaled + 10, y_scaled - text_h - 5),
-                                            (x_scaled + 10 + text_w, y_scaled + 5),
-                                            (0, 0, 0), -1)
+                                (text_w, text_h), _ = cv2.getTextSize(
+                                    depth_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
+                                )
+                                cv2.rectangle(
+                                    image_bgr_left,
+                                    (x_scaled + 10, y_scaled - text_h - 5),
+                                    (x_scaled + 10 + text_w, y_scaled + 5),
+                                    (0, 0, 0),
+                                    -1,
+                                )
 
                                 # 用红色加粗文字标注深度值
-                                cv2.putText(image_bgr_left, depth_text, (x_scaled + 10, y_scaled),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                cv2.putText(
+                                    image_bgr_left,
+                                    depth_text,
+                                    (x_scaled + 10, y_scaled),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.5,
+                                    (0, 0, 255),
+                                    2,
+                                )
         # endregion
 
         # region right
@@ -963,12 +1133,33 @@ class DPVO:
         # 在右侧图像顶部显示信息
         info_text = f"Previous: {prev_frames} / 7"
         text_size_info = cv2.getTextSize(info_text, font, font_scale, font_thickness)[0]
-        cv2.rectangle(image_bgr_right, (10, 10), (10 + text_size_info[0] + 10, 10 + text_size_info[1] + 10), bg_color, -1)
-        cv2.putText(image_bgr_right, info_text, (15, 30), font, font_scale, (255, 255, 255), font_thickness)
+        cv2.rectangle(
+            image_bgr_right,
+            (10, 10),
+            (10 + text_size_info[0] + 10, 10 + text_size_info[1] + 10),
+            bg_color,
+            -1,
+        )
+        cv2.putText(
+            image_bgr_right,
+            info_text,
+            (15, 30),
+            font,
+            font_scale,
+            (255, 255, 255),
+            font_thickness,
+        )
 
         # 获取所有3D点云信息
-        points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
-        points_3d = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3).cpu().numpy()
+        points = pops.point_cloud(
+            SE3(self.poses),
+            self.patches[:, : self.m],
+            self.intrinsics,
+            self.ix[: self.m],
+        )
+        points_3d = (
+            (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3).cpu().numpy()
+        )
         print(f"[POINTS] All 3D points shape: {points_3d.shape}")
 
         # 获取当前帧索引
@@ -976,8 +1167,14 @@ class DPVO:
 
         # 获取当前帧的pose
         if self.n > 0:
-            current_pose = SE3(self.poses[0, current_frame_idx] if self.poses.dim() == 3 else self.poses[current_frame_idx])
-            print(f"[POSE] Current frame {current_frame_idx} pose:\n{current_pose.data.cpu().numpy()}")
+            current_pose = SE3(
+                self.poses[0, current_frame_idx]
+                if self.poses.dim() == 3
+                else self.poses[current_frame_idx]
+            )
+            print(
+                f"[POSE] Current frame {current_frame_idx} pose:\n{current_pose.data.cpu().numpy()}"
+            )
 
         # 打印前5个点和最后5个点的坐标，共10个点
         if len(points_3d) > 0:
@@ -997,7 +1194,12 @@ class DPVO:
                     print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
 
         # 如果有多于一帧，获取前一帧的5个点
-        if self.n > 1 and hasattr(self, 'pg') and hasattr(self.pg, 'patches_') and self.pg.patches_ is not None:
+        if (
+            self.n > 1
+            and hasattr(self, "pg")
+            and hasattr(self.pg, "patches_")
+            and self.pg.patches_ is not None
+        ):
             prev_frame_idx = current_frame_idx - 1
             if prev_frame_idx >= 0 and prev_frame_idx < len(self.pg.patches_):
                 try:
@@ -1011,12 +1213,22 @@ class DPVO:
                             SE3(self.poses),
                             self.patches[:, start_idx:end_idx],
                             self.intrinsics,
-                            self.ix[start_idx:end_idx]
+                            self.ix[start_idx:end_idx],
                         )
 
                         if prev_points.dim() == 4 and prev_points.shape[1] > 0:
-                            prev_points_3d = (prev_points[...,1,1,:3] / prev_points[...,1,1,3:]).reshape(-1, 3).cpu().numpy()
-                            print(f"[POINTS] Previous frame {prev_frame_idx} first 5 and last 5 points coordinates:")
+                            prev_points_3d = (
+                                (
+                                    prev_points[..., 1, 1, :3]
+                                    / prev_points[..., 1, 1, 3:]
+                                )
+                                .reshape(-1, 3)
+                                .cpu()
+                                .numpy()
+                            )
+                            print(
+                                f"[POINTS] Previous frame {prev_frame_idx} first 5 and last 5 points coordinates:"
+                            )
 
                             # 打印前5个点
                             for i in range(min(5, len(prev_points_3d))):
@@ -1035,7 +1247,7 @@ class DPVO:
 
         # endregion
 
-        frame_bgr = np.hstack([image_bgr_left,image_bgr_right])
+        frame_bgr = np.hstack([image_bgr_left, image_bgr_right])
         # Save combined visualization
         debug_dir = "/home/jerett/Project/DPVO/Debug/Image"
         output_path = f"{debug_dir}/frame_{tstamp:06d}_visualization.png"
@@ -1047,16 +1259,17 @@ class DPVO:
         # Store original image for visualization
         original_image = image.clone()
 
-        image = 2 * (image[None,None] / 255.0) - 0.5
+        image = 2 * (image[None, None] / 255.0) - 0.5
         patches_per_frame = 96
-        centroid_sel_strat = 'RANDOM'
+        centroid_sel_strat = "RANDOM"
 
         with autocast(enabled=self.cfg.MIXED_PRECISION):
-            fmap, gmap, imap, patches, _, clr, coords = \
-                self.network.patchify.debug(image,
-                    patches_per_image=patches_per_frame,
-                    centroid_sel_strat=centroid_sel_strat,
-                    return_color=True)
+            fmap, gmap, imap, patches, _, clr, coords = self.network.patchify.debug(
+                image,
+                patches_per_image=patches_per_frame,
+                centroid_sel_strat=centroid_sel_strat,
+                return_color=True,
+            )
 
         # Visualize coordinates on original image and save
         self.visualize_coords_on_image(tstamp, original_image, coords)
@@ -1100,9 +1313,13 @@ class DPVO:
         for i, (x, y) in enumerate(frame_coords):
             if 0 <= x < w and 0 <= y < h:  # Ensure coordinates are within image bounds
                 # Draw small circle with different colors for visibility
-                cv2.circle(vis_image, (int(x), int(y)), 2, (0, 255, 0), -1)  # Green circles
+                cv2.circle(
+                    vis_image, (int(x), int(y)), 2, (0, 255, 0), -1
+                )  # Green circles
                 # Optional: add a small border around each point
-                cv2.circle(vis_image, (int(x), int(y)), 3, (255, 255, 255), 1)  # White border
+                cv2.circle(
+                    vis_image, (int(x), int(y)), 3, (255, 255, 255), 1
+                )  # White border
 
         # Add text showing the number of feature points
         num_points = len(frame_coords)
@@ -1114,20 +1331,49 @@ class DPVO:
 
         # Add text with background for better visibility
         text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
-        cv2.rectangle(vis_image,
-                     (text_position[0] - 5, text_position[1] - text_size[1] - 5),
-                     (text_position[0] + text_size[0] + 5, text_position[1] + 5),
-                     (0, 0, 0), -1)  # Black background
-        cv2.putText(vis_image, text, text_position, font, font_scale, (255, 255, 255), font_thickness)  # White text
+        cv2.rectangle(
+            vis_image,
+            (text_position[0] - 5, text_position[1] - text_size[1] - 5),
+            (text_position[0] + text_size[0] + 5, text_position[1] + 5),
+            (0, 0, 0),
+            -1,
+        )  # Black background
+        cv2.putText(
+            vis_image,
+            text,
+            text_position,
+            font,
+            font_scale,
+            (255, 255, 255),
+            font_thickness,
+        )  # White text
 
         # Add frame timestamp
         timestamp_text = f"Frame: {tstamp}"
         timestamp_position = (10, 70)  # Below the feature points text
-        cv2.rectangle(vis_image,
-                     (timestamp_position[0] - 5, timestamp_position[1] - text_size[1] - 5),
-                     (timestamp_position[0] + cv2.getTextSize(timestamp_text, font, font_scale, font_thickness)[0][0] + 5, timestamp_position[1] + 5),
-                     (0, 0, 0), -1)  # Black background
-        cv2.putText(vis_image, timestamp_text, timestamp_position, font, font_scale, (255, 255, 255), font_thickness)  # White text
+        cv2.rectangle(
+            vis_image,
+            (timestamp_position[0] - 5, timestamp_position[1] - text_size[1] - 5),
+            (
+                timestamp_position[0]
+                + cv2.getTextSize(timestamp_text, font, font_scale, font_thickness)[0][
+                    0
+                ]
+                + 5,
+                timestamp_position[1] + 5,
+            ),
+            (0, 0, 0),
+            -1,
+        )  # Black background
+        cv2.putText(
+            vis_image,
+            timestamp_text,
+            timestamp_position,
+            font,
+            font_scale,
+            (255, 255, 255),
+            font_thickness,
+        )  # White text
 
         # Create debug directory if it doesn't exist
         debug_dir = "/home/jerett/Project/DPVO/Debug/coords"
@@ -1153,20 +1399,21 @@ class DPVO:
         original_image = image.clone()
 
         ### 1.extract feature ###
-        image = 2 * (image[None,None] / 255.0) - 0.5
+        image = 2 * (image[None, None] / 255.0) - 0.5
         with autocast(enabled=self.cfg.MIXED_PRECISION):
-            fmap, gmap, imap, patches, _, clr = \
-                self.network.patchify(image,
-                    patches_per_image=self.cfg.PATCHES_PER_FRAME, 
-                    centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
-                    return_color=True)
+            fmap, gmap, imap, patches, _, clr = self.network.patchify(
+                image,
+                patches_per_image=self.cfg.PATCHES_PER_FRAME,
+                centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT,
+                return_color=True,
+            )
         ### 2.update state attributes ###
         self.tlist.append(tstamp)
         self.pg.tstamps_[self.n] = self.counter
         self.pg.intrinsics_[self.n] = intrinsics / self.RES
 
         # color info for visualization
-        clr = (clr[0,:,[2,1,0]] + 0.5) * (255.0 / 2)
+        clr = (clr[0, :, [2, 1, 0]] + 0.5) * (255.0 / 2)
         self.pg.colors_[self.n] = clr.to(torch.uint8)
 
         self.pg.index_[self.n + 1] = self.n + 1
@@ -1174,20 +1421,20 @@ class DPVO:
 
         ### 3.depth linear ###
         if self.n > 1:
-            if self.cfg.MOTION_MODEL == 'DAMPED_LINEAR':
-                P1 = SE3(self.pg.poses_[self.n-1])
-                P2 = SE3(self.pg.poses_[self.n-2])
+            if self.cfg.MOTION_MODEL == "DAMPED_LINEAR":
+                P1 = SE3(self.pg.poses_[self.n - 1])
+                P2 = SE3(self.pg.poses_[self.n - 2])
 
                 # To deal with varying camera hz
-                *_, a,b,c = [1]*3 + self.tlist
-                fac = (c-b) / (b-a)
+                *_, a, b, c = [1] * 3 + self.tlist
+                fac = (c - b) / (b - a)
 
                 xi = self.cfg.MOTION_DAMPING * fac * (P1 * P2.inv()).log()
                 tvec_qvec = (SE3.exp(xi) * P1).data
                 self.pg.poses_[self.n] = tvec_qvec
 
         ### 4.depth initialization ###
-        patches[:,:,2] = torch.rand_like(patches[:,:,2,0,0,None,None])
+        patches[:, :, 2] = torch.rand_like(patches[:, :, 2, 0, 0, None, None])
         self.pg.patches_[self.n] = patches
 
         # Visualize extracted coordinates on the original image
@@ -1199,7 +1446,7 @@ class DPVO:
         self.fmap1_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 1, 1)
         self.fmap2_[:, self.n % self.mem] = F.avg_pool2d(fmap[0], 4, 4)
 
-        self.counter += 1        
+        self.counter += 1
         if self.n > 0 and not self.is_initialized:
             if self.motion_probe() < 2.0:
                 self.pg.delta[self.counter - 1] = (self.counter - 2, Id[0])
@@ -1226,7 +1473,9 @@ class DPVO:
 
     def visualize_initialized_coordinates(self, tstamp, image, patches):
         """Visualize extracted patch coordinates on the original image"""
-        print(f"\n[VIS_INIT] Visualizing initialized coordinates for frame {self.n} (timestamp: {tstamp})")
+        print(
+            f"\n[VIS_INIT] Visualizing initialized coordinates for frame {self.n} (timestamp: {tstamp})"
+        )
 
         # Convert patches to coordinates
         # patches shape: [1, N, 3, 1, 1] where last dims are [x, y, depth]
@@ -1272,8 +1521,15 @@ class DPVO:
 
                 # Add index number for first 10 points only
                 if i < 10:
-                    cv2.putText(img_vis, f"{i}", (x_int + 3, y_int - 3),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+                    cv2.putText(
+                        img_vis,
+                        f"{i}",
+                        (x_int + 3, y_int - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.3,
+                        (0, 0, 255),
+                        1,
+                    )
 
         # Save the visualization
         output_dir = "/home/jerett/Project/DPVO/Debug/Data"
@@ -1301,12 +1557,12 @@ class DPVO:
 
         # Save poses
         # Convert poses from SE3 to transformation matrix
-        poses_se3 = SE3(self.poses[:, :self.n])  # Get poses for initialized frames
+        poses_se3 = SE3(self.poses[:, : self.n])  # Get poses for initialized frames
         poses_np = poses_se3.matrix().cpu().numpy()  # Convert to numpy [1, N, 4, 4]
 
         # Save poses as TUM format
         tum_file = os.path.join(output_dir, f"poses_iter_{iteration:02d}.txt")
-        with open(tum_file, 'w') as f:
+        with open(tum_file, "w") as f:
             for i in range(poses_np.shape[1]):  # poses_np shape: [1, N, 4, 4]
                 timestamp = self.tlist[i] if i < len(self.tlist) else float(i)
                 pose_matrix = poses_np[0, i]  # [4, 4]
@@ -1317,23 +1573,33 @@ class DPVO:
                 # Extract quaternion (x, y, z, w)
                 # Convert rotation matrix to quaternion using simple method
                 import scipy.spatial.transform as st
+
                 rotation = st.Rotation.from_matrix(pose_matrix[:3, :3])
                 quat = rotation.as_quat()  # (x, y, z, w)
                 qx, qy, qz, qw = quat
 
-                f.write(f"{timestamp:.6f} {tx:.6f} {ty:.6f} {tz:.6f} {qx:.6f} {qy:.6f} {qz:.6f} {qw:.6f}\n")
+                f.write(
+                    f"{timestamp:.6f} {tx:.6f} {ty:.6f} {tz:.6f} {qx:.6f} {qy:.6f} {qz:.6f} {qw:.6f}\n"
+                )
 
         # Save point cloud
         # Extract 3D points from patches
-        points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
-        points_3d = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3).cpu().numpy()
+        points = pops.point_cloud(
+            SE3(self.poses),
+            self.patches[:, : self.m],
+            self.intrinsics,
+            self.ix[: self.m],
+        )
+        points_3d = (
+            (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3).cpu().numpy()
+        )
 
         # Get colors for points
-        colors = self.pg.colors_[:self.m].cpu().numpy().reshape(-1, 3)
+        colors = self.pg.colors_[: self.m].cpu().numpy().reshape(-1, 3)
 
         # Save point cloud as PLY format
         ply_file = os.path.join(output_dir, f"points_iter_{iteration:02d}.ply")
-        with open(ply_file, 'w') as f:
+        with open(ply_file, "w") as f:
             f.write("ply\n")
             f.write("format ascii 1.0\n")
             f.write(f"element vertex {len(points_3d)}\n")
@@ -1353,17 +1619,18 @@ class DPVO:
         # Save as JSON for easier processing
         json_file = os.path.join(output_dir, f"state_iter_{iteration:02d}.json")
         import json
+
         state_data = {
-            'iteration': iteration,
-            'poses': poses_np[0].tolist(),  # [N, 4, 4]
-            'points': points_3d.tolist(),
-            'colors': colors.tolist(),
-            'timestamps': self.tlist[:self.n],
-            'frame_count': self.n,
-            'patch_count': self.m
+            "iteration": iteration,
+            "poses": poses_np[0].tolist(),  # [N, 4, 4]
+            "points": points_3d.tolist(),
+            "colors": colors.tolist(),
+            "timestamps": self.tlist[: self.n],
+            "frame_count": self.n,
+            "patch_count": self.m,
         }
 
-        with open(json_file, 'w') as f:
+        with open(json_file, "w") as f:
             json.dump(state_data, f, indent=2)
 
         print(f"[INIT_SAVE] Saved iteration {iteration}:")
@@ -1392,35 +1659,41 @@ class DPVO:
         """
         import numpy as np
 
-        if not hasattr(self, 'pg'):
+        if not hasattr(self, "pg"):
             return None
 
         # Initialize return data
         stats = {
-            'n': self.n,
-            'valid_poses': 0,
-            'valid_poses_data': [],
-            'total_points': 0,
-            'valid_3d_points': 0,
-            'valid_3d_points_data': None,
-            'valid_3d_points_colors': None,
-            'status': "INITIALIZING" if not self.is_initialized else "TRACKING",
-            'is_initialized': self.is_initialized
+            "n": self.n,
+            "valid_poses": 0,
+            "valid_poses_data": [],
+            "total_points": 0,
+            "valid_3d_points": 0,
+            "valid_3d_points_data": None,
+            "valid_3d_points_colors": None,
+            "status": "INITIALIZING" if not self.is_initialized else "TRACKING",
+            "is_initialized": self.is_initialized,
         }
 
         # Calculate total number of 3D points
-        stats['total_points'] = self.m  # self.m = n * M (total patches processed)
+        stats["total_points"] = self.m  # self.m = n * M (total patches processed)
 
         # Extract and count valid 3D points
         try:
-            points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m],
-                                    self.intrinsics, self.ix[:self.m])
+            points = pops.point_cloud(
+                SE3(self.poses),
+                self.patches[:, : self.m],
+                self.intrinsics,
+                self.ix[: self.m],
+            )
 
             # points shape should be [N, 3, 3, 4] where N is number of points
             # Extract center patch and convert to 3D coordinates (same as line 443)
             if points.dim() >= 4 and points.shape[-2:] == torch.Size([3, 4]):
                 # Extract center pixel (1, 1) from each 3x3 patch
-                points_center = points[..., 1, 1, :]  # [N, 4] in homogeneous coordinates
+                points_center = points[
+                    ..., 1, 1, :
+                ]  # [N, 4] in homogeneous coordinates
 
                 # Convert from homogeneous to 3D coordinates: xyz / w
                 xyz = points_center[:, :3]  # [N, 3]
@@ -1432,24 +1705,34 @@ class DPVO:
                 depth_values = points_3d[:, 2]  # z values (depth)
 
                 # Filter valid depth values (0.2 to 50 meters)
-                valid_mask = torch.isfinite(depth_values) & (depth_values > 0.2) & (depth_values < 50.0)
-                stats['valid_3d_points'] = valid_mask.sum().item()
+                valid_mask = (
+                    torch.isfinite(depth_values)
+                    & (depth_values > 0.2)
+                    & (depth_values < 50.0)
+                )
+                stats["valid_3d_points"] = valid_mask.sum().item()
 
-                if stats['valid_3d_points'] > 0:
-                    stats['valid_3d_points_data'] = points_3d[valid_mask].cpu().numpy()
+                if stats["valid_3d_points"] > 0:
+                    stats["valid_3d_points_data"] = points_3d[valid_mask].cpu().numpy()
             else:
                 # Fallback for unexpected shape
-                stats['valid_3d_points'] = 0
-                stats['valid_3d_points_data'] = None
-                stats['valid_3d_points_colors'] = None
+                stats["valid_3d_points"] = 0
+                stats["valid_3d_points_data"] = None
+                stats["valid_3d_points_colors"] = None
 
             # Get colors for valid points
-            if stats['valid_3d_points'] > 0 and hasattr(self.pg, 'colors_') and self.pg.colors_ is not None:
+            if (
+                stats["valid_3d_points"] > 0
+                and hasattr(self.pg, "colors_")
+                and self.pg.colors_ is not None
+            ):
                 try:
                     valid_colors = []
 
                     # Get indices of valid points
-                    valid_point_indices = torch.nonzero(valid_mask).squeeze().cpu().numpy()
+                    valid_point_indices = (
+                        torch.nonzero(valid_mask).squeeze().cpu().numpy()
+                    )
 
                     # Map points to their source frames
                     for frame_idx in range(min(self.n, len(self.pg.colors_))):
@@ -1457,46 +1740,57 @@ class DPVO:
                         frame_end = min(frame_start + self.m, len(valid_point_indices))
 
                         # Get valid points that belong to this frame
-                        frame_mask = (valid_point_indices >= frame_start) & (valid_point_indices < frame_end)
-                        frame_valid_indices = valid_point_indices[frame_mask] - frame_start
+                        frame_mask = (valid_point_indices >= frame_start) & (
+                            valid_point_indices < frame_end
+                        )
+                        frame_valid_indices = (
+                            valid_point_indices[frame_mask] - frame_start
+                        )
 
                         if len(frame_valid_indices) > 0:
                             colors = self.pg.colors_[frame_idx].cpu().numpy()
                             # Ensure indices don't exceed colors array size
-                            valid_frame_indices = frame_valid_indices[frame_valid_indices < colors.shape[0]]
+                            valid_frame_indices = frame_valid_indices[
+                                frame_valid_indices < colors.shape[0]
+                            ]
                             valid_colors.extend(colors[valid_frame_indices])
 
                     # Convert to numpy array
                     if valid_colors:
-                        stats['valid_3d_points_colors'] = np.array(valid_colors[:stats['valid_3d_points']])
+                        stats["valid_3d_points_colors"] = np.array(
+                            valid_colors[: stats["valid_3d_points"]]
+                        )
                     else:
-                        stats['valid_3d_points_colors'] = None
+                        stats["valid_3d_points_colors"] = None
 
                 except Exception as e:
                     print(f"[WARNING] Failed to extract colors: {e}")
-                    stats['valid_3d_points_colors'] = None
+                    stats["valid_3d_points_colors"] = None
 
         except Exception as e:
             print(f"[WARNING] Failed to extract valid 3D points: {e}")
-            stats['valid_3d_points'] = 0
-            stats['valid_3d_points_data'] = None
-            stats['valid_3d_points_colors'] = None
+            stats["valid_3d_points"] = 0
+            stats["valid_3d_points_data"] = None
+            stats["valid_3d_points_colors"] = None
 
         # Count valid poses
-        if hasattr(self, 'poses') and self.poses is not None:
-            stats['valid_poses_data'] = []
+        if hasattr(self, "poses") and self.poses is not None:
+            stats["valid_poses_data"] = []
 
             for i in range(min(self.n, self.poses.shape[1])):
                 pose = self.poses[0, i] if self.poses.dim() == 3 else self.poses[i]
 
                 if i == 0:
                     # First frame is always considered valid (origin)
-                    stats['valid_poses'] += 1
-                    stats['valid_poses_data'].append(pose.clone())
+                    stats["valid_poses"] += 1
+                    stats["valid_poses_data"].append(pose.clone())
                 else:
                     # For other frames, check if they've been estimated (not identity)
-                    if not torch.allclose(pose[3:7], torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device)):
-                        stats['valid_poses'] += 1
-                        stats['valid_poses_data'].append(pose.clone())
+                    if not torch.allclose(
+                        pose[3:7],
+                        torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device),
+                    ):
+                        stats["valid_poses"] += 1
+                        stats["valid_poses_data"].append(pose.clone())
 
         return stats
