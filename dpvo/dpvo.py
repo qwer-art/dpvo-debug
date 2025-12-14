@@ -677,7 +677,7 @@ class DPVO:
         # print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
 
         # Print frame statistics using dedicated function
-        self.print_frame_statistics(tstamp)
+        self.print_frame_statistics(tstamp,original_image)
 
         # Visualize feature points on current frame
         # self.visualize_feature_points(tstamp, original_image)
@@ -700,7 +700,7 @@ class DPVO:
         # print(f"tstamp: {tstamp}")
         # print(f"tstamp: {tstamp},n: {self.pg.n},m: {self.pg.m},M: {self.pg.M},N: {self.pg.N},poses: {array_save_poses.shape},points: {array_save_points.shape},colors: {array_save_colors.shape}")
 
-    def print_frame_statistics(self, tstamp):
+    def print_frame_statistics(self, tstamp, original_image):
         """
         Print comprehensive frame statistics including poses, points, and depth information.
 
@@ -708,7 +708,8 @@ class DPVO:
             tstamp: Timestamp of the current frame
         """
         print(f"\n[FRAME STATS] Timestamp: {tstamp},Keyframes: {self.n} / {self.counter}")
-        ### 1. 使用map key的方式去重，获取所有有效时间戳，一堆无效的都聚集在0上
+        ### 1. Pose 
+        # 使用map key的方式去重，获取所有有效时间戳，一堆无效的都聚集在0上
         kframe_trajs = {}
         for i in range(self.n):
             kframe_trajs[self.pg.tstamps_[i]] = self.pg.poses_[i]
@@ -719,6 +720,32 @@ class DPVO:
         curr_tstamp = self.pg.tstamps_[self.n - 1]
         curr_pose = self.pg.poses_[self.n - 1]
         print(f"[Pose],tstamp: {tstamp},curr_tstamp: {curr_tstamp},curr_pose: {curr_pose}")
+
+        ### 2. Patch
+        patch_pixels = self.patches[:, :self.m, :2, 1, 1]
+        patch_inv_depths = self.patches[:, :self.m, 2, 1, 1]
+        image_bgr = original_image.cpu().permute(1, 2, 0).numpy()
+
+        print(f"[Patch],pixels: {patch_pixels.shape},inv_depths: {patch_inv_depths.shape}")
+        print(f"[Patch],image_shape: {image_bgr.shape}")
+        minu = int(patch_pixels[...,0].min().item())
+        maxu = int(patch_pixels[...,0].max().item())
+        minv = int(patch_pixels[...,1].min().item())
+        maxv = int(patch_pixels[...,1].max().item())
+
+        print(f"[Patch],batch_range,top_left: [{minu},{minv}],bottom_right: [{maxu},{maxv}]")
+
+        inv_depth_min = patch_inv_depths.min().item()
+        inv_depth_max = patch_inv_depths.max().item()
+
+        # Calculate depth statistics with protection against division by zero
+        depth_min = 1.0 / (inv_depth_max + 1e-6)
+        depth_max = 1.0 / (inv_depth_min + 1e-6)
+
+        print(f"[Patch] inv_depth: {inv_depth_min:.3f} - {inv_depth_max:.3f}")
+        print(f"[Patch] depth: {depth_min:.3f} - {depth_max:.3f}")
+
+
 
         # 2. Process inverse depth and depth statistics
         if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
@@ -778,6 +805,7 @@ class DPVO:
                 depth_outlier_high = (depths > 50.0).sum().item()
 
                 print(f"  [STATS] Depth: {depth_min:.3f}-{depth_max:.3f}m, valid: {100*depth_valid_count/n_depth:.1f}%")
+
 
     def visualize_feature_points(self, tstamp, original_image):
         """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
