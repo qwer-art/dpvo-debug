@@ -202,6 +202,10 @@ class DPVO:
         if viz:
             self.start_viewer()
 
+        # keyframe pose
+        self.last_pose = SE3.Identity(1, device="cuda")
+        self.distance = 0.
+
     def load_long_term_loop_closure(self):
         try:
             from .loop_closure.long_term import LongTermLoopClosure
@@ -775,6 +779,13 @@ class DPVO:
         # save_patches(tstamp,self.pg.patches_)
         # print(f"tstamp: {tstamp},patches: {self.pg.patches_.shape}")
 
+        # Update pose tracking if initialized
+        if self.is_initialized and self.n > 1:
+            current_pose = SE3(self.pg.poses_[self.n - 1:self.n])  # Keep batch dimension
+            motion_distance = (current_pose * self.last_pose.inv()).log().norm().item()
+            self.distance += motion_distance
+            self.last_pose = current_pose
+
         # Print frame statistics using dedicated function
         self.print_frame_statistics(tstamp, original_image)
 
@@ -807,7 +818,7 @@ class DPVO:
             tstamp: Timestamp of the current frame
         """
         print(
-            f"\n[FRAME STATS] Timestamp: {tstamp},Keyframes/Counter: {self.n}/{self.counter}"
+            f"\n[FRAME STATS] Timestamp: {tstamp},Distance: {self.distance:.3f},Keyframes/Counter: {self.n}/{self.counter}"
         )
         print(f"[State],init: {self.is_initialized}")
         ### 1. Pose
@@ -1126,6 +1137,18 @@ class DPVO:
         # endregion
 
         # region right
+        curr_pose = self.pg.poses_[self.n - 1]
+
+        pc_poses = SE3(self.poses)
+        pc_patches = self.patches[:, : self.m]
+        pc_intrinsics = self.intrinsics
+        pc_ix = self.ix[: self.m]
+        points = pops.point_cloud(pc_poses, pc_patches, pc_intrinsics, pc_ix)
+        points_3d = (
+            (points[..., 1, 1, :3] / points[..., 1, 1, 3:]).reshape(-1, 3).cpu().numpy()
+        )
+
+
         ## 2.可视化右侧图像
         # 2.1 显示前7帧关键帧信息
         prev_frames = min(7, self.n)  # 最多显示前7帧
