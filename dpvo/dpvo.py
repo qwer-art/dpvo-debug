@@ -152,6 +152,7 @@ class DPVO:
 
         ### state attributes ###
         self.tlist = []
+        self.nkframe_tstamps = []
         self.counter = 0
         self.update_counter = 0  # Count update calls
 
@@ -285,6 +286,11 @@ class DPVO:
 
         t0, dP = self.pg.delta[t]
         return dP * self.get_pose(t0)
+    
+    def get_lnkframe_tstamp(self,t):
+        if len(self.nkframe_tstamps) == 0:
+            return -1
+        return self.nkframe_tstamps[-1]
 
     def terminate(self):
 
@@ -397,6 +403,7 @@ class DPVO:
             k = self.n - self.cfg.KEYFRAME_INDEX
             t0 = self.pg.tstamps_[k-1]
             t1 = self.pg.tstamps_[k]
+            self.nkframe_tstamps.append(t1)
 
             dP = SE3(self.pg.poses_[k]) * SE3(self.pg.poses_[k-1]).inv()
             self.pg.delta[t1] = (t0, dP)
@@ -653,7 +660,6 @@ class DPVO:
 
         elif self.is_initialized:
             self.update()
-            # self.update_debug()
             self.keyframe()
 
         if self.cfg.CLASSIC_LOOP_CLOSURE:
@@ -674,7 +680,7 @@ class DPVO:
         self.print_frame_statistics(tstamp)
 
         # Visualize feature points on current frame
-        self.visualize_feature_points(tstamp, original_image)
+        # self.visualize_feature_points(tstamp, original_image)
 
         # Visualize feature points from network output
 
@@ -701,22 +707,18 @@ class DPVO:
         Args:
             tstamp: Timestamp of the current frame
         """
-        print(f"\n[FRAME STATS] Timestamp: {tstamp}")
+        print(f"\n[FRAME STATS] Timestamp: {tstamp},Keyframes: {self.n} / {self.counter}")
+        ### 1. 使用map key的方式去重，获取所有有效时间戳，一堆无效的都聚集在0上
+        kframe_trajs = {}
+        for i in range(self.n):
+            kframe_trajs[self.pg.tstamps_[i]] = self.pg.poses_[i]
 
-        # 1. Count valid poses
-        valid_poses = 0
-        if hasattr(self, 'poses') and self.poses is not None:
-            for i in range(min(self.n, self.poses.shape[1])):
-                pose = self.poses[0, i] if self.poses.dim() == 3 else self.poses[i]
-                if i == 0:
-                    valid_poses += 1  # First frame is always valid (origin)
-                else:
-                    # Check if pose is not identity
-                    if not torch.allclose(pose[3:7], torch.tensor([0.0, 0.0, 0.0, 1.0], device=pose.device)):
-                        valid_poses += 1
-
-        print(f"  Valid poses: {valid_poses}")
-        print(f"  Total points: {self.m}")
+        nkframe_tstamp = self.get_lnkframe_tstamp(tstamp)
+        print(f"[Pose],kframe_size: {len(kframe_trajs)},last_notkey_tstamp: {nkframe_tstamp}")
+        # 使用正确的pose获取方式：通过轨迹插值获取当前帧的准确pose
+        curr_tstamp = self.pg.tstamps_[self.n - 1]
+        curr_pose = self.pg.poses_[self.n - 1]
+        print(f"[Pose],tstamp: {tstamp},curr_tstamp: {curr_tstamp},curr_pose: {curr_pose}")
 
         # 2. Process inverse depth and depth statistics
         if hasattr(self, 'patches') and self.patches is not None and self.m > 0:
@@ -748,14 +750,7 @@ class DPVO:
             outlier_low_count = (inv_depths < 0.02).sum().item()
             outlier_high_count = (inv_depths > 5.0).sum().item()
 
-            print(f"  Inverse depth stats:")
-            print(f"    Range: {inv_depth_min:.6f} - {inv_depth_max:.6f}")
-            print(f"    Mean±Std: {inv_depth_mean:.6f}±{inv_depth_std:.6f}")
-            print(f"    Median: {inv_depth_median:.6f}")
-            print(f"    Percentiles: 25%={p25:.6f}, 75%={p75:.6f}, 95%={p95:.6f}")
-            print(f"    Valid range (0.02-5.0): {valid_count}/{n} ({100*valid_count/n:.1f}%)")
-            if outlier_low_count > 0 or outlier_high_count > 0:
-                print(f"    Outliers: <0.02={outlier_low_count}, >5.0={outlier_high_count}")
+            print(f"  [STATS] InvDepth: {inv_depth_min:.6f}-{inv_depth_max:.6f}, valid: {100*valid_count/n:.1f}%")
 
             # Depth statistics
             valid_inv_depths = inv_depths[(inv_depths >= 0.02) & (inv_depths <= 5.0)]
@@ -782,14 +777,7 @@ class DPVO:
                 depth_outlier_low = (depths < 0.2).sum().item()
                 depth_outlier_high = (depths > 50.0).sum().item()
 
-                print(f"  Depth stats:")
-                print(f"    Range: {depth_min:.6f} - {depth_max:.6f}m")
-                print(f"    Mean±Std: {depth_mean:.6f}±{depth_std:.6f}m")
-                print(f"    Median: {depth_median:.6f}m")
-                print(f"    Percentiles: 25%={depth_p25:.6f}m, 75%={depth_p75:.6f}m, 95%={depth_p95:.6f}m")
-                print(f"    Valid range (0.2-50m): {depth_valid_count}/{n_depth} ({100*depth_valid_count/n_depth:.1f}%)")
-                if depth_outlier_low > 0 or depth_outlier_high > 0:
-                    print(f"    Outliers: <0.2m={depth_outlier_low}, >50m={depth_outlier_high}")
+                print(f"  [STATS] Depth: {depth_min:.3f}-{depth_max:.3f}m, valid: {100*depth_valid_count/n_depth:.1f}%")
 
     def visualize_feature_points(self, tstamp, original_image):
         """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
@@ -950,9 +938,72 @@ class DPVO:
         cv2.rectangle(image_bgr_right, (10, 10), (10 + text_size_info[0] + 10, 10 + text_size_info[1] + 10), bg_color, -1)
         cv2.putText(image_bgr_right, info_text, (15, 30), font, font_scale, (255, 255, 255), font_thickness)
 
+        # 获取所有3D点云信息
         points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
         points_3d = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3).cpu().numpy()
-        print(f"points_3d: {points_3d.shape} ")
+        print(f"[POINTS] All 3D points shape: {points_3d.shape}")
+
+        # 获取当前帧索引
+        current_frame_idx = self.n - 1 if self.n > 0 else 0
+
+        # 获取当前帧的pose
+        if self.n > 0:
+            current_pose = SE3(self.poses[0, current_frame_idx] if self.poses.dim() == 3 else self.poses[current_frame_idx])
+            print(f"[POSE] Current frame {current_frame_idx} pose:\n{current_pose.data.cpu().numpy()}")
+
+        # 打印前5个点和最后5个点的坐标，共10个点
+        if len(points_3d) > 0:
+            print(f"[POINTS] First 5 and last 5 points coordinates (x,y,z):")
+
+            # 打印前5个点
+            for i in range(min(5, len(points_3d))):
+                x, y, z = points_3d[i]
+                print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
+
+            # 如果点数超过5个，打印最后5个点
+            if len(points_3d) > 5:
+                print("  ...")
+                start_idx = max(5, len(points_3d) - 5)
+                for i in range(start_idx, len(points_3d)):
+                    x, y, z = points_3d[i]
+                    print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
+
+        # 如果有多于一帧，获取前一帧的5个点
+        if self.n > 1 and hasattr(self, 'pg') and hasattr(self.pg, 'patches_') and self.pg.patches_ is not None:
+            prev_frame_idx = current_frame_idx - 1
+            if prev_frame_idx >= 0 and prev_frame_idx < len(self.pg.patches_):
+                try:
+                    # 获取前一帧的patches范围
+                    start_idx = prev_frame_idx * self.M
+                    end_idx = min(start_idx + self.M, self.m)
+
+                    if start_idx < self.m:
+                        # 获取前一帧的3D点
+                        prev_points = pops.point_cloud(
+                            SE3(self.poses),
+                            self.patches[:, start_idx:end_idx],
+                            self.intrinsics,
+                            self.ix[start_idx:end_idx]
+                        )
+
+                        if prev_points.dim() == 4 and prev_points.shape[1] > 0:
+                            prev_points_3d = (prev_points[...,1,1,:3] / prev_points[...,1,1,3:]).reshape(-1, 3).cpu().numpy()
+                            print(f"[POINTS] Previous frame {prev_frame_idx} first 5 and last 5 points coordinates:")
+
+                            # 打印前5个点
+                            for i in range(min(5, len(prev_points_3d))):
+                                x, y, z = prev_points_3d[i]
+                                print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
+
+                            # 如果点数超过5个，打印最后5个点
+                            if len(prev_points_3d) > 5:
+                                print("  ...")
+                                start_idx = max(5, len(prev_points_3d) - 5)
+                                for i in range(start_idx, len(prev_points_3d)):
+                                    x, y, z = prev_points_3d[i]
+                                    print(f"  Point {i}: ({x:.3f}, {y:.3f}, {z:.3f})")
+                except Exception as e:
+                    print(f"[POINTS] Error getting previous frame points: {e}")
 
         # endregion
 
