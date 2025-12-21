@@ -713,13 +713,15 @@ class DPVO:
         # Debug主目录
         debug_main_dir = "/home/jerett/Project/DPVO/Debug/Movie4082"
 
-        # 1.将图像保存下来
+        # 1.保存原始图像
+        self.save_raw_image(tstamp, original_image, debug_main_dir)
+        # 2.将图像保存下来(可视化)
         self.visualize_feature_points(tstamp, original_image, debug_main_dir)
-        # 2.保存关键帧pose
+        # 3.保存关键帧pose
         self.save_keyframe_poses(tstamp, debug_main_dir)
-        # 3.保存当前帧点
+        # 4.保存当前帧点
         self.save_current_frame_points(tstamp, debug_main_dir)
-        # 4.保存全部点
+        # 5.保存全部点
         self.save_all_points(tstamp, debug_main_dir)
 
     def print_frame_statistics(self, tstamp, original_image):
@@ -1081,6 +1083,16 @@ class DPVO:
         output_path = f"{debug_dir}/{tstamp:06d}.png"
         cv2.imwrite(output_path, frame_bgr)
 
+    def save_raw_image(self, tstamp, original_image, debug_main_dir):
+        """保存原始图像"""
+        debug_dir = f"{debug_main_dir}/raw_image"
+        os.makedirs(debug_dir, exist_ok=True)
+        output_path = f"{debug_dir}/{tstamp:06d}.png"
+
+        # 转换图像格式从 CHW (PyTorch) 到 HWC (OpenCV)
+        image_bgr = original_image.cpu().permute(1, 2, 0).numpy()
+        cv2.imwrite(output_path, image_bgr)
+
     def save_keyframe_poses(self, tstamp, debug_main_dir):
         """保存关键帧pose信息"""
         # 保存所有关键帧pose到kframe_pose文件夹
@@ -1115,17 +1127,54 @@ class DPVO:
         os.makedirs(debug_dir, exist_ok=True)
         output_path = f"{debug_dir}/{tstamp:06d}.npy"
 
-        if self.m > 0:
-            # 获取当前帧的patches数量
-            current_frame_points = min(self.M, self.m)
+        if self.m > 0 and self.n > 0:
+            # 获取当前帧的patches
+            current_patches = self.pg.patches_[self.n - 1]  # 当前帧patches
 
-            # 获取当前帧的3D点坐标 (n, 3)
-            points_3d = self.pg.points_[:current_frame_points].cpu().numpy()
+            # 获取像素坐标 (需要乘以RES得到原始图像坐标)
+            pixel_coords = current_patches[:, :2, 1, 1] * self.RES  # [M, 2] - u, v
+            inv_depths = current_patches[:, 2, 1, 1]  # [M] - 逆深度
+
+            # 获取当前帧的内参和pose
+            current_intrinsics = self.pg.intrinsics_[self.n - 1]  # [4] - fx, fy, cx, cy
+            current_pose = self.pg.poses_[self.n - 1]  # [7] - pose
+
+            # 提取内参
+            fx, fy, cx, cy = current_intrinsics.cpu().numpy()
+
+            # 转换像素坐标到相机坐标系下的3D点 (z=1/inv_depth)
+            u = pixel_coords[:, 0].cpu().numpy()  # 像素u坐标
+            v = pixel_coords[:, 1].cpu().numpy()  # 像素v坐标
+            inv_d = inv_depths.cpu().numpy()      # 逆深度
+            depth = 1.0 / inv_d                  # 深度
+
+            # 相机坐标系下的3D点
+            x_cam = (u - cx) * depth / fx
+            y_cam = (v - cy) * depth / fy
+            z_cam = depth
+
+            # 相机坐标系下的点 (N, 4) 齐次坐标
+            points_cam = np.column_stack([x_cam, y_cam, z_cam, np.ones_like(x_cam)])
+
+            # 简化点云计算，直接使用手动计算避免CUDA错误
+            # 获取pose变换矩阵 - 使用逆变换从相机坐标系到世界坐标系
+            pose_se3 = SE3(current_pose)
+            pose_inv = pose_se3.inv()
+            pose_inv_matrix = pose_inv.matrix().squeeze().cpu().numpy()  # [4, 4]
+
+            # 变换到世界坐标系
+            points_world = (pose_inv_matrix @ points_cam.T).T  # [N, 4]
+            points_3d = points_world[:, :3]  # [N, 3] - 只取x,y,z
+
+            # 过滤有效的深度范围
+            depth = 1.0 / inv_depths.cpu().numpy()
+            valid_mask = (depth > 0.2) & (depth < 50.0)
+            points_3d = points_3d[valid_mask]
 
             # 保存为numpy矩阵
             np.save(output_path, points_3d)
         else:
-            # 如果没有点，保存空矩阵
+            # 如果没有点或未初始化，保存空矩阵
             empty_matrix = np.zeros((0, 3))
             np.save(output_path, empty_matrix)
 
