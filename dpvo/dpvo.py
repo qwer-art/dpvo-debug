@@ -1153,23 +1153,17 @@ class DPVO:
             y_cam = (v - cy) * depth / fy
             z_cam = depth
 
-            # 相机坐标系下的点 (N, 4) 齐次坐标
-            points_cam = np.column_stack([x_cam, y_cam, z_cam, np.ones_like(x_cam)])
+            # 当前帧点云直接保存在相机坐标系下，不进行世界坐标变换
+            points_3d = np.column_stack([x_cam, y_cam, z_cam])
 
-            # 简化点云计算，直接使用手动计算避免CUDA错误
-            # 获取pose变换矩阵 - 使用逆变换从相机坐标系到世界坐标系
-            pose_se3 = SE3(current_pose)
-            pose_inv = pose_se3.inv()
-            pose_inv_matrix = pose_inv.matrix().squeeze().cpu().numpy()  # [4, 4]
-
-            # 变换到世界坐标系
-            points_world = (pose_inv_matrix @ points_cam.T).T  # [N, 4]
-            points_3d = points_world[:, :3]  # [N, 3] - 只取x,y,z
+            # 输出调试信息
+            print(f"[DEBUG] Camera coordinate system points (first 3): {points_3d[:3] if len(points_3d) > 0 else 'None'}")
 
             # 过滤有效的深度范围
-            depth = 1.0 / inv_depths.cpu().numpy()
             valid_mask = (depth > 0.2) & (depth < 50.0)
             points_3d = points_3d[valid_mask]
+
+            print(f"[DEBUG] Valid points count in camera coords: {len(points_3d)}")
 
             # 保存为numpy矩阵
             np.save(output_path, points_3d)
