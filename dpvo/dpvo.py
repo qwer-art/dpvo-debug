@@ -708,10 +708,19 @@ class DPVO:
             self.last_pose = current_pose
 
         # Print frame statistics using dedicated function
-        self.print_frame_statistics(tstamp, original_image)
+        # self.print_frame_statistics(tstamp, original_image)
 
-        # Visualize feature points on current frame
-        self.visualize_feature_points(tstamp, original_image)
+        # Debug主目录
+        debug_main_dir = "/home/jerett/Project/DPVO/Debug/Movie4082"
+
+        # 1.将图像保存下来
+        self.visualize_feature_points(tstamp, original_image, debug_main_dir)
+        # 2.保存关键帧pose
+        self.save_keyframe_poses(tstamp, debug_main_dir)
+        # 3.保存当前帧点
+        self.save_current_frame_points(tstamp, debug_main_dir)
+        # 4.保存全部点
+        self.save_all_points(tstamp, debug_main_dir)
 
     def print_frame_statistics(self, tstamp, original_image):
         """
@@ -801,7 +810,7 @@ class DPVO:
                 f"[Point],idx: {point_idx},ii: {point_ii},kk: {point_kk},pixel: ({pixel_u},{pixel_v}),point: ({point_3d[0]:.2f},{point_3d[1]:.2f},{point_3d[2]:.2f})"
             )
 
-    def visualize_feature_points(self, tstamp, original_image):
+    def visualize_feature_points(self, tstamp, original_image, debug_main_dir):
         """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
         print(
             f"\n[Visual] Timestamp: {tstamp},Distance: {self.distance:.3f},Keyframes/Counter: {self.n}/{self.counter}"
@@ -1067,6 +1076,72 @@ class DPVO:
 
         frame_bgr = np.hstack([image_bgr_left, image_bgr_right])
         # Save combined visualization
-        debug_dir = "/home/jerett/Project/DPVO/Debug/Image"
-        output_path = f"{debug_dir}/frame_{tstamp:06d}.png"
+        debug_dir = f"{debug_main_dir}/image"
+        os.makedirs(debug_dir, exist_ok=True)
+        output_path = f"{debug_dir}/{tstamp:06d}.png"
         cv2.imwrite(output_path, frame_bgr)
+
+    def save_keyframe_poses(self, tstamp, debug_main_dir):
+        """保存关键帧pose信息"""
+        # 保存所有关键帧pose到kframe_pose文件夹
+        kframe_pose_dir = f"{debug_main_dir}/kframe_pose"
+        os.makedirs(kframe_pose_dir, exist_ok=True)
+
+        # 保存关键帧时间戳到kframe_time文件夹
+        kframe_time_dir = f"{debug_main_dir}/kframe_time"
+        os.makedirs(kframe_time_dir, exist_ok=True)
+
+        # 创建pose矩阵 (n, 7) 格式: [tx, ty, tz, qx, qy, qz, qw]
+        poses_matrix = np.zeros((self.n, 7))
+        timestamps_array = np.zeros((self.n,))
+
+        # 收集所有关键帧的pose信息
+        for i in range(self.n):
+            timestamps_array[i] = self.pg.tstamps_[i].item()
+            pose = self.pg.poses_[i].cpu().numpy()
+            poses_matrix[i] = [pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]]
+
+        # 保存pose矩阵到kframe_pose文件夹
+        pose_output_path = f"{kframe_pose_dir}/{tstamp:06d}.npy"
+        np.save(pose_output_path, poses_matrix)
+
+        # 保存时间戳数组到kframe_time文件夹
+        time_output_path = f"{kframe_time_dir}/{tstamp:06d}.npy"
+        np.save(time_output_path, timestamps_array)
+
+    def save_current_frame_points(self, tstamp, debug_main_dir):
+        """保存当前帧的点云信息"""
+        debug_dir = f"{debug_main_dir}/current_points"
+        os.makedirs(debug_dir, exist_ok=True)
+        output_path = f"{debug_dir}/{tstamp:06d}.npy"
+
+        if self.m > 0:
+            # 获取当前帧的patches数量
+            current_frame_points = min(self.M, self.m)
+
+            # 获取当前帧的3D点坐标 (n, 3)
+            points_3d = self.pg.points_[:current_frame_points].cpu().numpy()
+
+            # 保存为numpy矩阵
+            np.save(output_path, points_3d)
+        else:
+            # 如果没有点，保存空矩阵
+            empty_matrix = np.zeros((0, 3))
+            np.save(output_path, empty_matrix)
+
+    def save_all_points(self, tstamp, debug_main_dir):
+        """保存所有点云信息"""
+        debug_dir = f"{debug_main_dir}/all_points"
+        os.makedirs(debug_dir, exist_ok=True)
+        output_path = f"{debug_dir}/{tstamp:06d}.npy"
+
+        if self.m > 0:
+            # 获取所有3D点坐标 (n, 3)
+            points_3d = self.pg.points_[:self.m].cpu().numpy()
+
+            # 保存为numpy矩阵
+            np.save(output_path, points_3d)
+        else:
+            # 如果没有点，保存空矩阵
+            empty_matrix = np.zeros((0, 3))
+            np.save(output_path, empty_matrix)
