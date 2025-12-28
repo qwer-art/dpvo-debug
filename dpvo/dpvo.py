@@ -4,8 +4,10 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 import sys
 import os
+import json
 from datetime import datetime
 import cv2  # For visualization
+from kornia.geometry import left_to_right_epipolar_distance
 
 
 def get_jet_color(value):
@@ -553,6 +555,7 @@ class DPVO:
         r = self.cfg.PATCH_LIFETIME
         t0 = self.M * max((self.n - r), 0)
         t1 = self.M * max((self.n - 1), 0)
+        # print(f"[Forward],r: {r},t0: {t0},t1: {t1}")
         return flatmeshgrid(
             torch.arange(t0, t1, device="cuda"),
             torch.arange(self.n - 1, self.n, device="cuda"),
@@ -563,6 +566,7 @@ class DPVO:
         r = self.cfg.PATCH_LIFETIME
         t0 = self.M * max((self.n - 1), 0)
         t1 = self.M * max((self.n - 0), 0)
+        # print(f"[Back],r: {r},t0: {t0},t1: {t1}")
         return flatmeshgrid(
             torch.arange(t0, t1, device="cuda"),
             torch.arange(max(self.n - r, 0), self.n, device="cuda"),
@@ -573,12 +577,12 @@ class DPVO:
         """track new frame"""
 
         # Print frame separator with timestamp
-        print("\n" + "=" * 80)
-        print(f"[FRAME] Processing Frame #{tstamp}")
-        print("=" * 80)
+        # print("\n" + "=" * 80)
+        print(f"==== [FRAME] Processing Frame #{tstamp} ====")
+        # print("=" * 80)
 
         # Store current timestamp for use in update()
-        self.current_timestamp = tstamp
+        self.tstamp = tstamp
 
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc(image, self.n)
@@ -593,17 +597,7 @@ class DPVO:
         # print(f"{tstamp},image: {self.image_.shape},poses: {self.pg.poses_.shape},points: {self.pg.points_.shape},colors: {self.pg.colors_.shape}")
 
         # Store original image for visualization
-        original_image = image.clone()  # Store before normalization
-
-        # Store original image for initialization if this is frame 7
-        if self.n == 7:
-            self.init_frame_image = (
-                original_image.cpu().numpy()
-            )  # Store original image as HWC uint8
-
-        ## image/intrinsics
-        # save_image(tstamp,image)
-        # save_intrinsics(tstamp,intrinsics)
+        self.original_image = image.clone()  # Store before normalization
 
         image = 2 * (image[None, None] / 255.0) - 0.5
 
@@ -710,19 +704,20 @@ class DPVO:
         # Print frame statistics using dedicated function
         # self.print_frame_statistics(tstamp, original_image)
 
-        # Debug主目录
-        debug_main_dir = "/home/jerett/Project/DPVO/Debug/Movie4082"
-
-        # 1.保存原始图像
-        self.save_raw_image(tstamp, original_image, debug_main_dir)
-        # 2.将图像保存下来(可视化)
-        self.visualize_feature_points(tstamp, original_image, debug_main_dir)
-        # 3.保存关键帧pose
-        self.save_keyframe_poses(tstamp, debug_main_dir)
-        # 4.保存当前帧点
-        self.save_current_frame_points(tstamp, debug_main_dir)
-        # 5.保存全部点
-        self.save_all_points(tstamp, debug_main_dir)
+        # # Debug主目录
+        # debug_main_dir = "/home/jerett/Project/DPVO/Debug/Movie4082"
+        # # 1.保存原始图像
+        # self.save_raw_image(tstamp, original_image, debug_main_dir)
+        # # 2.将图像保存下来(可视化)
+        # self.visualize_feature_points(tstamp, original_image, debug_main_dir)
+        # # 3.保存相机参数和分辨率
+        # self.save_camera_params(tstamp, debug_main_dir)
+        # # 4.保存关键帧pose
+        # self.save_keyframe_poses(tstamp, debug_main_dir)
+        # # 5.保存当前帧点
+        # self.save_current_frame_points(tstamp, debug_main_dir)
+        # # 6.保存全部点
+        # self.save_all_points(tstamp, debug_main_dir)
 
     def print_frame_statistics(self, tstamp, original_image):
         """
@@ -1092,6 +1087,34 @@ class DPVO:
         # 转换图像格式从 CHW (PyTorch) 到 HWC (OpenCV)
         image_bgr = original_image.cpu().permute(1, 2, 0).numpy()
         cv2.imwrite(output_path, image_bgr)
+
+    def save_camera_params(self, tstamp, debug_main_dir):
+        """保存相机参数和分辨率信息"""
+        debug_dir = f"{debug_main_dir}/param"
+        os.makedirs(debug_dir, exist_ok=True)
+        output_path = f"{debug_dir}/{tstamp:06d}.json"
+
+        # 获取当前帧的内参 [fx, fy, cx, cy]
+        current_intrinsics = self.pg.intrinsics_[self.n - 1].cpu().numpy() if self.n > 0 else np.zeros(4)
+        fx, fy, cx, cy = current_intrinsics
+
+        # 创建参数字典
+        params_data = {
+            'timestamp': tstamp,
+            'frame_id': self.n - 1 if self.n > 0 else 0,
+            'resolution': self.RES,
+            'fx': float(fx),
+            'fy': float(fy),
+            'cx': float(cx),
+            'cy': float(cy),
+            'intrinsics': [float(fx), float(fy), float(cx), float(cy)],  # [fx, fy, cx, cy]
+            'image_height': int(self.ht),
+            'image_width': int(self.wd)
+        }
+
+        # 保存为JSON格式
+        with open(output_path, 'w') as f:
+            json.dump(params_data, f, indent=2)
 
     def save_keyframe_poses(self, tstamp, debug_main_dir):
         """保存关键帧pose信息"""
