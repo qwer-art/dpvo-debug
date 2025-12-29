@@ -505,6 +505,11 @@ class DPVO:
             lmbda = torch.as_tensor([1e-4], device="cuda")
             weight = weight.float()
             target = coords[..., self.P // 2, self.P // 2] + delta.float()
+            print(f"tstamp: {self.tstamp}, coords: {coords.shape}, corr: {corr.shape}, ctx: {ctx.shape}, delta: {delta.shape}, weight: {weight.shape}, ii: {self.pg.ii.shape}, jj: {self.pg.jj.shape}, kk: {self.pg.kk.shape}")
+
+            # 可视化投影到当前帧的coords、delta、weight
+            if self.is_initialized:
+                self.visualize_reprojection(coords, delta, weight)
 
         self.pg.target = target
         self.pg.weight = weight
@@ -578,8 +583,10 @@ class DPVO:
 
         # Print frame separator with timestamp
         # print("\n" + "=" * 80)
+        if self.n > 10:
+            return        # print("=" * 80)
+
         print(f"==== [FRAME] Processing Frame #{tstamp} ====")
-        # print("=" * 80)
 
         # Store current timestamp for use in update()
         self.tstamp = tstamp
@@ -605,7 +612,8 @@ class DPVO:
             fmap, gmap, imap, patches, _, clr = self.network.patchify(
                 image,
                 patches_per_image=self.cfg.PATCHES_PER_FRAME,
-                centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT,
+                # centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT,
+                centroid_sel_strat='GRADIENT_BIAS',
                 return_color=True,
             )
 
@@ -806,6 +814,89 @@ class DPVO:
             print(
                 f"[Point],idx: {point_idx},ii: {point_ii},kk: {point_kk},pixel: ({pixel_u},{pixel_v}),point: ({point_3d[0]:.2f},{point_3d[1]:.2f},{point_3d[2]:.2f})"
             )
+
+    def visualize_reprojection(self, coords, delta, weight):
+        """可视化投影到当前帧的coords、delta、weight"""
+        # 只处理投影到当前帧的边 (jj == self.n - 1)
+        current_frame_mask = (self.pg.jj == (self.n - 1))
+        ii_current = self.pg.ii[current_frame_mask]
+        kk_current = self.pg.kk[current_frame_mask]
+
+        if len(ii_current) == 0:
+            return
+
+        # 获取对应的coords、delta、weight索引
+        # coords形状: [1, total_edges, 2, 3, 3]
+        # delta和weight形状: [1, total_edges, 2]
+        coords_idx = torch.where(current_frame_mask)[0]
+        coords_current = coords[0, coords_idx, :, 1, 1]  # [N, 2] 取中心点坐标
+        delta_current = delta[0, coords_idx]  # [N, 2]
+        weight_current = weight[0, coords_idx, 0]  # [N] 取第一个权重
+
+        # 转换到原始图像坐标系 (乘以RES)
+        coords_original = coords_current * self.RES
+        delta_pixels = delta_current * self.RES  # delta也在降采样坐标系，需要乘以RES
+
+        # 获取当前帧图像 (self.original_image是CHW格式，BGR顺序，值范围0-255)
+        current_image = self.original_image.cpu()  # [3, H, W], BGR格式
+        image_bgr = current_image.permute(1, 2, 0).numpy().astype(np.uint8)  # [H, W, 3], BGR格式
+
+        # 区分当前帧投当前帧 和其他帧投当前帧
+        ii_np = ii_current.cpu().numpy()
+        current_frame_idx = self.n - 1
+
+        # 绘制每个投影点和delta向量
+        coords_np = coords_original.cpu().numpy()
+        delta_np = delta_pixels.cpu().numpy()
+
+        for i in range(len(coords_np)):
+            # 起点坐标 (当前投影位置)
+            u1, v1 = coords_np[i]
+
+            # 终点坐标 (投影位置 + delta)
+            u2, v2 = coords_np[i] + delta_np[i]
+
+            # 判断是当前帧投当前帧 还是其他帧投当前帧
+            if ii_np[i] == current_frame_idx:
+                # 当前帧投当前帧 - 红色
+                color = (0, 0, 255)  # BGR: 红色
+            else:
+                # 其他帧投当前帧 - 绿色
+                color = (0, 255, 0)  # BGR: 绿色
+
+            # 绘制delta向量 (线段)
+            cv2.line(image_bgr, (int(u1), int(v1)), (int(u2), int(v2)), color, 2)
+
+            # 绘制起点圆圈
+            cv2.circle(image_bgr, (int(u1), int(v1)), 3, color, -1)
+
+            # 绘制终点箭头
+            angle = np.arctan2(v2 - v1, u2 - u1)
+            arrow_length = 5
+            arrow_angle = np.pi / 6
+            p1 = (int(u2 - arrow_length * np.cos(angle - arrow_angle)),
+                  int(v2 - arrow_length * np.sin(angle - arrow_angle)))
+            p2 = (int(u2 - arrow_length * np.cos(angle + arrow_angle)),
+                  int(v2 - arrow_length * np.sin(angle + arrow_angle)))
+            cv2.line(image_bgr, (int(u2), int(v2)), p1, color, 2)
+            cv2.line(image_bgr, (int(u2), int(v2)), p2, color, 2)
+
+        # 统计两种类型的边数量
+        num_current_to_current = (ii_np == current_frame_idx).sum()
+        num_other_to_current = (ii_np != current_frame_idx).sum()
+
+        # 添加文本信息
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(image_bgr, f"Frame: {self.tstamp}", (10, 30), 4, 1, (255, 0, 0), 2)
+        cv2.putText(image_bgr, f"Edges: {len(coords_np)}", (10, 60), 4, 1, (255, 0, 0), 2)
+        cv2.putText(image_bgr, f"C->C: {num_current_to_current}", (10, 90), 4, 0.8, (0, 0, 255), 2)
+        cv2.putText(image_bgr, f"O->C: {num_other_to_current}", (10, 120), 4, 0.8, (0, 255, 0), 2)
+
+        # 保存图像
+        debug_dir = "/home/jerett/Project/DPVO/Debug/reproj_image"
+        os.makedirs(debug_dir, exist_ok=True)
+        output_path = f"{debug_dir}/{self.tstamp:06d}.png"
+        cv2.imwrite(output_path, image_bgr)
 
     def visualize_feature_points(self, tstamp, original_image, debug_main_dir):
         """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
