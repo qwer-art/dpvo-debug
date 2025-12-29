@@ -582,10 +582,6 @@ class DPVO:
         """track new frame"""
 
         # Print frame separator with timestamp
-        # print("\n" + "=" * 80)
-        if self.n > 10:
-            return        # print("=" * 80)
-
         print(f"==== [FRAME] Processing Frame #{tstamp} ====")
 
         # Store current timestamp for use in update()
@@ -841,14 +837,29 @@ class DPVO:
         current_image = self.original_image.cpu()  # [3, H, W], BGR格式
         image_bgr = current_image.permute(1, 2, 0).numpy().astype(np.uint8)  # [H, W, 3], BGR格式
 
+        # 创建左侧白色图例区域 (宽300)
+        h, w = image_bgr.shape[:2]
+        legend_width = 300
+        legend_panel = np.ones((h, legend_width, 3), dtype=np.uint8) * 255  # 白色背景
+
         # 区分当前帧投当前帧 和其他帧投当前帧
         ii_np = ii_current.cpu().numpy()
         current_frame_idx = self.n - 1
+
+        # 归一化weight用于颜色映射 (0=低置信度/红色, 1=高置信度/绿色)
+        weight_np = weight_current.cpu().numpy()
+        weight_min = weight_np.min()
+        weight_max = weight_np.max()
+        if weight_max > weight_min:
+            weight_normalized = (weight_np - weight_min) / (weight_max - weight_min)
+        else:
+            weight_normalized = np.ones_like(weight_np) * 0.5  # 全部为中间值
 
         # 绘制每个投影点和delta向量
         coords_np = coords_original.cpu().numpy()
         delta_np = delta_pixels.cpu().numpy()
 
+        # 第一步：绘制所有delta向量线段（底层），颜色由weight映射
         for i in range(len(coords_np)):
             # 起点坐标 (当前投影位置)
             u1, v1 = coords_np[i]
@@ -856,47 +867,84 @@ class DPVO:
             # 终点坐标 (投影位置 + delta)
             u2, v2 = coords_np[i] + delta_np[i]
 
+            # 根据weight映射颜色 (使用OpenCV的JET颜色映射)
+            w = weight_normalized[i]
+            color_bgr = cv2.applyColorMap(np.array([[np.uint8(w * 255)]]), cv2.COLORMAP_JET)[0, 0].tolist()
+
+            # 绘制delta向量 (宽度为1的线段)
+            cv2.line(image_bgr, (int(u1), int(v1)), (int(u2), int(v2)), color_bgr, 1)
+
+        # 第二步：绘制所有点（顶层），颜色由类型固定
+        for i in range(len(coords_np)):
+            # 起点坐标 (当前投影位置)
+            u1, v1 = coords_np[i]
+
             # 判断是当前帧投当前帧 还是其他帧投当前帧
             if ii_np[i] == current_frame_idx:
                 # 当前帧投当前帧 - 红色
                 color = (0, 0, 255)  # BGR: 红色
             else:
-                # 其他帧投当前帧 - 绿色
-                color = (0, 255, 0)  # BGR: 绿色
+                # 其他帧投当前帧 - 黄色
+                color = (0, 255, 255)  # BGR: 黄色
 
-            # 绘制delta向量 (线段)
-            cv2.line(image_bgr, (int(u1), int(v1)), (int(u2), int(v2)), color, 2)
-
-            # 绘制起点圆圈
-            cv2.circle(image_bgr, (int(u1), int(v1)), 3, color, -1)
-
-            # 绘制终点箭头
-            angle = np.arctan2(v2 - v1, u2 - u1)
-            arrow_length = 5
-            arrow_angle = np.pi / 6
-            p1 = (int(u2 - arrow_length * np.cos(angle - arrow_angle)),
-                  int(v2 - arrow_length * np.sin(angle - arrow_angle)))
-            p2 = (int(u2 - arrow_length * np.cos(angle + arrow_angle)),
-                  int(v2 - arrow_length * np.sin(angle + arrow_angle)))
-            cv2.line(image_bgr, (int(u2), int(v2)), p1, color, 2)
-            cv2.line(image_bgr, (int(u2), int(v2)), p2, color, 2)
+            # 绘制起点圆圈 (大小为2)
+            cv2.circle(image_bgr, (int(u1), int(v1)), 2, color, -1)
 
         # 统计两种类型的边数量
         num_current_to_current = (ii_np == current_frame_idx).sum()
         num_other_to_current = (ii_np != current_frame_idx).sum()
 
-        # 添加文本信息
+        # 计算weight最小值和最大值对应的颜色
+        color_min = cv2.applyColorMap(np.array([[np.uint8(0)]]), cv2.COLORMAP_JET)[0, 0].tolist()
+        color_max = cv2.applyColorMap(np.array([[np.uint8(255)]]), cv2.COLORMAP_JET)[0, 0].tolist()
+
+        # 在图例面板上添加文本信息
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(image_bgr, f"Frame: {self.tstamp}", (10, 30), 4, 1, (255, 0, 0), 2)
-        cv2.putText(image_bgr, f"Edges: {len(coords_np)}", (10, 60), 4, 1, (255, 0, 0), 2)
-        cv2.putText(image_bgr, f"C->C: {num_current_to_current}", (10, 90), 4, 0.8, (0, 0, 255), 2)
-        cv2.putText(image_bgr, f"O->C: {num_other_to_current}", (10, 120), 4, 0.8, (0, 255, 0), 2)
+        y_offset = 40
+        line_height = 35
+
+        cv2.putText(legend_panel, f"Frame: {self.tstamp}", (15, int(y_offset)), font, 0.9, (0, 0, 0), 2)
+        y_offset += line_height
+        cv2.putText(legend_panel, f"Edges: {len(coords_np)}", (15, int(y_offset)), font, 0.9, (0, 0, 0), 2)
+        y_offset += int(line_height * 1.5)
+
+        cv2.putText(legend_panel, f"Current->Current: {num_current_to_current}", (15, int(y_offset)), font, 0.7, (0, 0, 255), 2)
+        y_offset += line_height
+        cv2.putText(legend_panel, f"Other->Current: {num_other_to_current}", (15, int(y_offset)), font, 0.7, (0, 255, 255), 2)
+        y_offset += int(line_height * 1.5)
+
+        cv2.putText(legend_panel, f"Weight Min: {weight_min:.3f}", (15, int(y_offset)), font, 0.7, tuple(color_min), 2)
+        y_offset += line_height
+        cv2.putText(legend_panel, f"Weight Max: {weight_max:.3f}", (15, int(y_offset)), font, 0.7, tuple(color_max), 2)
+        y_offset += int(line_height * 1.5)
+
+        # 添加颜色条图例
+        cv2.putText(legend_panel, "Weight Color Map:", (15, int(y_offset)), font, 0.7, (0, 0, 0), 2)
+        y_offset += line_height
+
+        # 绘制JET颜色条
+        colorbar_height = 150
+        colorbar_width = 40
+        colorbar_x = 30
+        colorbar_y = int(y_offset)
+
+        for i in range(colorbar_height):
+            w = i / colorbar_height
+            color = cv2.applyColorMap(np.array([[np.uint8(w * 255)]]), cv2.COLORMAP_JET)[0, 0].tolist()
+            cv2.line(legend_panel, (colorbar_x, colorbar_y + i), (colorbar_x + colorbar_width, colorbar_y + i), color, 1)
+
+        # 颜色条标签
+        cv2.putText(legend_panel, "Low", (colorbar_x + colorbar_width + 10, colorbar_y + 10), font, 0.5, (0, 0, 0), 1)
+        cv2.putText(legend_panel, "High", (colorbar_x + colorbar_width + 10, colorbar_y + colorbar_height), font, 0.5, (0, 0, 0), 1)
+
+        # 拼接图例面板和图像
+        result_image = np.hstack([legend_panel, image_bgr])
 
         # 保存图像
         debug_dir = "/home/jerett/Project/DPVO/Debug/reproj_image"
         os.makedirs(debug_dir, exist_ok=True)
         output_path = f"{debug_dir}/{self.tstamp:06d}.png"
-        cv2.imwrite(output_path, image_bgr)
+        cv2.imwrite(output_path, result_image)
 
     def visualize_feature_points(self, tstamp, original_image, debug_main_dir):
         """Single frame visualization with 3 parts: 1) original image, 2) projected patches with depth colors, 3) depth colorbar."""
