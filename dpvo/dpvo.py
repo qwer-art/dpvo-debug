@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 import cv2  # For visualization
 from kornia.geometry import left_to_right_epipolar_distance
+from sklearn.decomposition import PCA
 
 
 def get_jet_color(value):
@@ -605,15 +606,20 @@ class DPVO:
         image = 2 * (image[None, None] / 255.0) - 0.5
 
         with autocast(enabled=self.cfg.MIXED_PRECISION):
-            fmap, gmap, imap, patches, _, clr = self.network.patchify(
+            fmap, gmap, imap, patches, _, clr, imap_dense = self.network.patchify(
                 image,
                 patches_per_image=self.cfg.PATCHES_PER_FRAME,
                 # centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT,
                 centroid_sel_strat='GRADIENT_BIAS',
                 return_color=True,
+                return_dense=True,
             )
 
         # print(f"ts: {tstamp},image: {image.shape},fmap: {fmap.shape},gmap: {gmap.shape},imap: {imap.shape},patches: {patches.shape},clr: {clr.shape}")
+
+        # 保存fmap和imap用于可视化（使用稠密版本）
+        self.fmap_vis = fmap.detach().clone()
+        self.imap_vis = imap_dense.detach().clone()
 
         # pred_feature = (fmap, gmap, imap, patches, _, clr)
         # save_features(tstamp,pred_feature)
@@ -811,6 +817,40 @@ class DPVO:
                 f"[Point],idx: {point_idx},ii: {point_ii},kk: {point_kk},pixel: ({pixel_u},{pixel_v}),point: ({point_3d[0]:.2f},{point_3d[1]:.2f},{point_3d[2]:.2f})"
             )
 
+    def feature_to_rgb(self, feature_map):
+        """使用PCA将高维特征图转换为RGB图像
+
+        Args:
+            feature_map: [C, H, W] 或 [1, C, H, W] 或 [1, 1, C, H, W] 格式的特征图
+
+        Returns:
+            rgb_image: [H, W, 3] RGB图像
+        """
+        # 移除多余的维度
+        if feature_map.dim() == 5:
+            feature_map = feature_map[0, 0]  # [1, 1, C, H, W] -> [C, H, W]
+        elif feature_map.dim() == 4:
+            feature_map = feature_map[0]  # [1, C, H, W] -> [C, H, W]
+
+        C, H, W = feature_map.shape
+
+        # 转换为numpy: [H, W, C]
+        feat_np = feature_map.cpu().numpy().transpose(1, 2, 0)
+
+        # Reshape为2D: [H*W, C]
+        feat_2d = feat_np.reshape(-1, C)
+
+        # 使用PCA降维到3维
+        pca = PCA(n_components=3)
+        feat_pca = pca.fit_transform(feat_2d)
+
+        # 归一化到0-255
+        feat_pca = feat_pca.reshape(H, W, 3)
+        feat_pca = (feat_pca - feat_pca.min()) / (feat_pca.max() - feat_pca.min() + 1e-8)
+        rgb_image = (feat_pca * 255).astype(np.uint8)
+
+        return rgb_image
+
     def visualize_reprojection(self, coords, delta, weight):
         """可视化投影到当前帧的coords、delta、weight"""
         # 只处理投影到当前帧的边 (jj == self.n - 1)
@@ -962,8 +1002,23 @@ class DPVO:
             label = f"{i/10:.1f}"
             cv2.putText(legend_panel, label, (bar_x + 5, bar_y_bottom + 15), font, 0.4, (0, 0, 0), 1)
 
-        # 拼接图例面板和图像
-        result_image = np.hstack([legend_panel, image_bgr])
+        # 可视化fmap和imap（使用PCA降维到RGB）
+        fmap_rgb = self.feature_to_rgb(self.fmap_vis)
+        imap_rgb = self.feature_to_rgb(self.imap_vis)
+
+        # 放大2倍（因为fmap和imap是原图的1/4）
+        fmap_rgb = cv2.resize(fmap_rgb, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+        imap_rgb = cv2.resize(imap_rgb, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+
+        # 在fmap和imap上添加名称标签
+        cv2.putText(fmap_rgb, "FMAP", (10, 30), font, 0.9, (0, 0, 255), 2)
+        cv2.putText(imap_rgb, "IMAP", (10, 30), font, 0.9, (0, 0, 255), 2)
+
+        # 上下拼接fmap和imap
+        feature_images = np.vstack([fmap_rgb, imap_rgb])
+
+        # 拼接：左侧图例 + 中间可视化图 + 右侧特征图
+        result_image = np.hstack([legend_panel, image_bgr, feature_images])
 
         # 保存图像
         debug_dir = "/home/jerett/Project/DPVO/Debug/reproj_image"

@@ -107,10 +107,10 @@ class Patchifier(nn.Module):
         g = F.avg_pool2d(g, 4, 4)
         return g
 
-    def forward(self, images, patches_per_image=80, disps=None, centroid_sel_strat='RANDOM', return_color=False):
+    def forward(self, images, patches_per_image=80, disps=None, centroid_sel_strat='RANDOM', return_color=False, return_dense=False):
         """ extract patches from input images """
         fmap = self.fnet(images) / 4.0
-        imap = self.inet(images) / 4.0
+        imap_dense = self.inet(images) / 4.0
 
         b, n, c, h, w = fmap.shape
         P = self.patch_size
@@ -138,7 +138,7 @@ class Patchifier(nn.Module):
             raise NotImplementedError(f"Patch centroid selection not implemented: {centroid_sel_strat}")
 
         coords = torch.stack([x, y], dim=-1).float()
-        imap = altcorr.patchify(imap[0], coords, 0).view(b, -1, DIM, 1, 1)
+        imap = altcorr.patchify(imap_dense[0], coords, 0).view(b, -1, DIM, 1, 1)
         gmap = altcorr.patchify(fmap[0], coords, P//2).view(b, -1, 128, P, P)
         # print(f"coords: {coords.shape},imap: {imap.shape},gmap: {gmap.shape}")
 
@@ -155,8 +155,12 @@ class Patchifier(nn.Module):
         index = index.repeat(1, patches_per_image).reshape(-1)
 
         if return_color:
+            if return_dense:
+                return fmap, gmap, imap, patches, index, clr, imap_dense
             return fmap, gmap, imap, patches, index, clr
 
+        if return_dense:
+            return fmap, gmap, imap, patches, index, imap_dense
         return fmap, gmap, imap, patches, index
 
     def debug(self, images, patches_per_image=80, disps=None, centroid_sel_strat='RANDOM', return_color=False):
