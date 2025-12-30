@@ -859,7 +859,24 @@ class DPVO:
         coords_np = coords_original.cpu().numpy()
         delta_np = delta_pixels.cpu().numpy()
 
-        # 第一步：绘制所有delta向量线段（底层），颜色由weight映射
+
+        # 第一步：绘制所有点（顶层），颜色由类型固定
+        for i in range(len(coords_np)):
+            # 起点坐标 (当前投影位置)
+            u1, v1 = coords_np[i]
+
+            # 判断是当前帧投当前帧 还是其他帧投当前帧
+            if ii_np[i] == current_frame_idx:
+                # 当前帧投当前帧 - 红色
+                color = (0, 0, 255)  # BGR: 红色
+            else:
+                # 其他帧投当前帧 - 绿色
+                color = (0, 255, 0)  # BGR: 绿色
+
+            # 绘制起点圆圈 (大小为2)
+            cv2.circle(image_bgr, (int(u1), int(v1)), 2, color, -1)
+
+        # 第二步：绘制所有delta向量线段（底层），颜色由weight映射
         for i in range(len(coords_np)):
             # 起点坐标 (当前投影位置)
             u1, v1 = coords_np[i]
@@ -874,32 +891,27 @@ class DPVO:
             # 绘制delta向量 (宽度为1的线段)
             cv2.line(image_bgr, (int(u1), int(v1)), (int(u2), int(v2)), color_bgr, 1)
 
-        # 第二步：绘制所有点（顶层），颜色由类型固定
-        for i in range(len(coords_np)):
-            # 起点坐标 (当前投影位置)
-            u1, v1 = coords_np[i]
-
-            # 判断是当前帧投当前帧 还是其他帧投当前帧
-            if ii_np[i] == current_frame_idx:
-                # 当前帧投当前帧 - 红色
-                color = (0, 0, 255)  # BGR: 红色
-            else:
-                # 其他帧投当前帧 - 黄色
-                color = (0, 255, 255)  # BGR: 黄色
-
-            # 绘制起点圆圈 (大小为2)
-            cv2.circle(image_bgr, (int(u1), int(v1)), 2, color, -1)
 
         # 统计两种类型的边数量
         num_current_to_current = (ii_np == current_frame_idx).sum()
         num_other_to_current = (ii_np != current_frame_idx).sum()
 
-        # 计算weight最小值和最大值对应的颜色
-        color_min = cv2.applyColorMap(np.array([[np.uint8(0)]]), cv2.COLORMAP_JET)[0, 0].tolist()
-        color_max = cv2.applyColorMap(np.array([[np.uint8(255)]]), cv2.COLORMAP_JET)[0, 0].tolist()
+        # 统计weight分布（0.0~1.0，每隔0.1一个柱子）
+        weight_normalized_full = (weight_np - weight_min) / (weight_max - weight_min) if weight_max > weight_min else weight_np - weight_min
+        hist_bins = np.arange(0, 1.1, 0.1)  # [0.0, 0.1, 0.2, ..., 1.0]
+        hist_counts = []
+
+        for i in range(len(hist_bins) - 1):
+            # 统计在当前区间的点数
+            if i < len(hist_bins) - 2:
+                count = ((weight_normalized_full >= hist_bins[i]) & (weight_normalized_full < hist_bins[i+1])).sum()
+            else:
+                # 最后一个区间包含1.0
+                count = ((weight_normalized_full >= hist_bins[i]) & (weight_normalized_full <= hist_bins[i+1])).sum()
+            hist_counts.append(count)
 
         # 在图例面板上添加文本信息
-        font = cv2.FONT_HERSHEY_SIMPLEX
+        font = 4
         y_offset = 40
         line_height = 35
 
@@ -908,34 +920,47 @@ class DPVO:
         cv2.putText(legend_panel, f"Edges: {len(coords_np)}", (15, int(y_offset)), font, 0.9, (0, 0, 0), 2)
         y_offset += int(line_height * 1.5)
 
-        cv2.putText(legend_panel, f"Current->Current: {num_current_to_current}", (15, int(y_offset)), font, 0.7, (0, 0, 255), 2)
+        cv2.putText(legend_panel, f"C->C: {num_current_to_current}", (15, int(y_offset)), font, 0.9, (0, 0, 255), 2)
         y_offset += line_height
-        cv2.putText(legend_panel, f"Other->Current: {num_other_to_current}", (15, int(y_offset)), font, 0.7, (0, 255, 255), 2)
+        cv2.putText(legend_panel, f"O->C: {num_other_to_current}", (15, int(y_offset)), font, 0.9, (0, 255, 0), 2)
         y_offset += int(line_height * 1.5)
 
-        cv2.putText(legend_panel, f"Weight Min: {weight_min:.3f}", (15, int(y_offset)), font, 0.7, tuple(color_min), 2)
-        y_offset += line_height
-        cv2.putText(legend_panel, f"Weight Max: {weight_max:.3f}", (15, int(y_offset)), font, 0.7, tuple(color_max), 2)
-        y_offset += int(line_height * 1.5)
+        # 绘制weight分布柱状图
+        cv2.putText(legend_panel, "Weight", (15, int(y_offset)), font, 0.9, (0, 0, 0), 2)
+        y_offset += line_height * 1.5
 
-        # 添加颜色条图例
-        cv2.putText(legend_panel, "Weight Color Map:", (15, int(y_offset)), font, 0.7, (0, 0, 0), 2)
-        y_offset += line_height
+        # 柱状图参数
+        chart_x = 20
+        chart_y = int(y_offset)
+        chart_width = 260
+        chart_height = 200
+        bar_width = chart_width / 10  # 10个柱子
+        max_count = max(hist_counts) if len(hist_counts) > 0 and max(hist_counts) > 0 else 1
 
-        # 绘制JET颜色条
-        colorbar_height = 150
-        colorbar_width = 40
-        colorbar_x = 30
-        colorbar_y = int(y_offset)
+        # 绘制柱状图
+        for i in range(10):
+            # 计算柱子高度和颜色
+            count = hist_counts[i]
+            bar_height = int((count / max_count) * chart_height) if max_count > 0 else 0
 
-        for i in range(colorbar_height):
-            w = i / colorbar_height
-            color = cv2.applyColorMap(np.array([[np.uint8(w * 255)]]), cv2.COLORMAP_JET)[0, 0].tolist()
-            cv2.line(legend_panel, (colorbar_x, colorbar_y + i), (colorbar_x + colorbar_width, colorbar_y + i), color, 1)
+            # 计算颜色（使用JET映射，对齐到0~255）
+            color_value = int((i / 9.0) * 255)  # 0~255
+            color = cv2.applyColorMap(np.array([[np.uint8(color_value)]]), cv2.COLORMAP_JET)[0, 0].tolist()
 
-        # 颜色条标签
-        cv2.putText(legend_panel, "Low", (colorbar_x + colorbar_width + 10, colorbar_y + 10), font, 0.5, (0, 0, 0), 1)
-        cv2.putText(legend_panel, "High", (colorbar_x + colorbar_width + 10, colorbar_y + colorbar_height), font, 0.5, (0, 0, 0), 1)
+            # 绘制柱子
+            bar_x = int(chart_x + i * bar_width)
+            bar_y_bottom = chart_y + chart_height
+            bar_y_top = bar_y_bottom - bar_height
+
+            if bar_height > 0:
+                cv2.rectangle(legend_panel, (bar_x, bar_y_top), (bar_x + int(bar_width) - 2, bar_y_bottom), tuple(color), -1)
+
+            # 在柱子顶部写数量
+            cv2.putText(legend_panel, str(count), (bar_x + 5, bar_y_top - 5), font, 0.5, (0, 0, 0), 1)
+
+            # 在柱子底部写标签
+            label = f"{i/10:.1f}"
+            cv2.putText(legend_panel, label, (bar_x + 5, bar_y_bottom + 15), font, 0.4, (0, 0, 0), 1)
 
         # 拼接图例面板和图像
         result_image = np.hstack([legend_panel, image_bgr])
